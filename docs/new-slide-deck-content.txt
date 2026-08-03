@@ -1,0 +1,390 @@
+⸻
+
+Karbon-Assure Edge Node
+
+Slide 1 – Title
+
+Karbon-Assure Edge Node
+
+Edge AI for Environmental Evidence Generation
+
+* Arduino UNO Q
+* Arduino Physical AI Challenge 2026
+* Vadiraj Deshpande
+* Karbon-Assure.tech
+
+⸻
+
+Slide 2 – The Problem
+
+Environmental monitoring today
+
+* Remote monitoring is expensive
+* Continuous cloud connectivity is unreliable
+* Raw sensor values don’t explain what is happening
+* Cloud-only AI increases latency and bandwidth
+
+Question
+
+Can an edge device transform sensor data into trustworthy environmental evidence before uploading?
+
+⸻
+
+Slide 3 – Our Vision
+
+Move from
+
+Sensor Node
+
+to
+
+Intelligent Evidence Node
+
+The node should
+
+* Observe
+* Understand
+* Detect anomalies
+* Generate evidence
+* Synchronize with Karbon-Assure
+
+⸻
+
+Slide 4 – Why Arduino UNO Q?
+
+Hybrid architecture
+
+STM32
+
+* Real-time sensing
+* Analog acquisition
+* Deterministic timing
+
+Linux Processor
+
+* Feature engineering
+* AI inference
+* Storage
+* Networking
+* Dashboard integration
+
+Explain why this hybrid architecture is a better engineering choice than forcing everything onto a single processor.
+
+⸻
+
+Slide 5 – System Architecture
+Sensors
+
+↓
+
+STM32
+
+↓
+
+Linux
+
+↓
+
+Feature Engineering
+
+↓
+
+Decision Tree
+
+↓
+
+Evidence Record
+
+↓
+
+Karbon-Assure
+
+Slide 6 – Sensor Selection
+
+Why these sensors?
+
+Soil Moisture
+
+Primary environmental signal
+
+BME688
+
+* Temperature
+* Humidity
+* Pressure
+* Gas resistance
+
+BH1750
+
+Ambient light
+
+Explain how each sensor contributes a different piece of environmental context.
+
+⸻
+
+Slide 7 – Feature Engineering
+
+Raw sensor values become useful features
+
+Examples
+
+* Relative Soil Moisture Index
+* Ambient Light Index
+* Gas Stability
+* Temperature trend
+* Humidity trend
+
+Emphasize that AI consumes engineered features rather than raw sensor values.
+
+⸻
+
+Slide 8 – Edge Intelligence
+Processing pipeline
+Read sensors
+
+↓
+
+Validate
+
+↓
+
+Filter
+
+↓
+
+Compute Features
+
+↓
+
+Decision Tree
+
+↓
+
+Confidence
+
+↓
+
+Semantic Flag
+
+
+Slide 9 – Why a Decision Tree?
+
+Explain
+
+* Explainable AI
+* Fast
+* Lightweight
+* Easy to validate
+* Appropriate for edge devices
+
+Mention that more advanced models can be introduced later without changing the architecture.
+
+⸻
+
+Slide 10 – Evidence Pipeline
+
+Each observation contains
+
+* Timestamp
+* Sensor readings
+* Engineered features
+* Decision
+* Confidence
+* Model version
+
+This is the artifact synchronized with Karbon-Assure.
+
+⸻
+
+Slide 11 – Hardware Demonstration
+
+Live hardware
+
+* Arduino UNO Q
+* BME688
+* BH1750
+* Capacitive soil sensor
+
+Mention dual I²C address strategy
+
+* BH1750
+    * 0x23
+    * 0x5C
+* BME688
+    * 0x76
+    * 0x77
+
+⸻
+
+Slide 12 – Demonstration Scenario
+
+Two pots
+
+Healthy plant
+
+↓
+
+Normal observations
+
+Stressed plant
+
+↓
+
+Drying soil
+
+↓
+
+Environmental change
+
+↓
+
+Edge detection
+
+↓
+
+Evidence generated
+
+⸻
+
+Slide 13 – Dashboard
+
+Show
+
+* Live sensor values
+* AI state
+* Confidence
+* Timeline
+* Environmental evidence
+
+⸻
+
+Slide 14 – Results
+
+Present
+
+* Sensor graphs
+* Moisture changes
+* Light changes
+* Decision Tree output
+* CPU usage
+* Memory usage
+
+⸻
+
+Slide 15 – Engineering Decisions
+
+Why
+
+Hybrid Compute?
+
+Why
+
+Decision Tree?
+
+Why
+
+Feature Engineering?
+
+Why
+
+Edge-first?
+
+This slide is for technical judges.
+
+⸻
+
+Slide 16 – Practical Benefits
+
+Lower bandwidth
+
+Faster response
+
+Offline capability
+
+Explainable AI
+
+Scalable architecture
+
+⸻
+
+Slide 17 – Prototype Scope
+
+What this prototype demonstrates
+
+✅ Edge sensing
+
+✅ Local AI
+
+✅ Environmental monitoring
+
+✅ Evidence generation
+
+✅ Cloud synchronization
+
+Make it explicit that these are implemented.
+
+⸻
+
+Slide 18 – Path to Production
+
+Future roadmap
+
+Power
+
+* Solar
+* Battery
+
+Deployment
+
+* Weatherproof enclosure
+* GPS
+* Fleet management
+
+Sensors
+
+* Soil temperature
+* Rainfall
+* EC
+* pH (where appropriate)
+
+Reliability
+
+* OTA
+* Health monitoring
+* Remote diagnostics
+
+Security
+
+* Device identity
+* Secure communication
+* Evidence integrity
+
+Clearly separate these from the contest implementation.
+
+⸻
+
+Slide 19 – Karbon-Assure Vision
+
+This architecture becomes
+
+* Edge node
+* Digital MRV
+* Environmental evidence engine
+* Insurance-quality field observations
+* Carbon project intelligence
+
+Connect the prototype to Karbon-Assure’s long-term roadmap without claiming production readiness.
+
+⸻
+
+Slide 20 – Conclusion
+
+What we demonstrated
+
+* Hybrid computing with Arduino UNO Q
+* Intelligent environmental sensing
+* Explainable edge AI
+* Evidence generation instead of raw telemetry
+* A scalable architecture for future digital MRV
+
+Thank You.
