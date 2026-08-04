@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Inference — Karbon Assure{% endblock %}
+{% block content %}
+<h1 class="ka-page-title">Inference</h1>
+<p class="ka-page-sub">Pot A and Pot B, separate. Placeholder literature-seeded tree — see docs/plan/decision-tree-prep-plan.md.</p>
+
+<div class="ka-pot-columns">
+  {% for pot in pots %}
+  <section class="ka-pot-column" data-pot="{{ pot }}">
+    <h2>Pot {{ pot }}</h2>
+    <div class="ka-card">
+      <h3>RSMI Trend</h3>
+      <div class="ka-chart" id="chart-rsmi-{{ pot }}"></div>
+    </div>
+    <div class="ka-card">
+      <h3>Current Flag</h3>
+      <div class="ka-flag" id="flag-{{ pot }}">—</div>
+    </div>
+    <div class="ka-card">
+      <h3>Flag History</h3>
+      <div class="ka-flag-history" id="flag-history-{{ pot }}"></div>
+    </div>
+  </section>
+  {% endfor %}
+</div>
+
+<script src="{{ url_for('static', filename='trend_chart.js') }}"></script>
+<script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+<script>KA.initInferencePage({{ pots | tojson }});</script>
+{% endblock %}

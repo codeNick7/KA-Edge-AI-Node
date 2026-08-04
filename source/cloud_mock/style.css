@@ -1,0 +1,116 @@
+/* Same theme tokens as source/dashboard/static/dashboard.css and
+   distributed-app/web/app/globals.css :root -- kept in sync manually since
+   this is a standalone mock, not wired into the real build. */
+:root {
+  --background: #090C09;
+  --foreground: #EEE9E2;
+  --secondary: #120E0A;
+  --secondary-foreground: #C4B49A;
+  --accent: #52B788;
+  --accent-foreground: #080F0A;
+  --muted-foreground: #8A7B68;
+  --card: #131009;
+  --border: #2E2318;
+  --brand-secondary: #8A5A47;
+  --brand-secondary-light: #B07A63;
+  --radius: 0.5rem;
+  --font-sans: ui-sans-serif, "DM Sans", system-ui, sans-serif;
+  --font-display: ui-serif, Georgia, "Fraunces", serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}
+
+.ka-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--secondary);
+}
+.ka-logo { height: 40px; width: 40px; object-fit: contain; border-radius: 8px; }
+.ka-header h1 {
+  font-family: var(--font-display);
+  font-size: 1.2rem;
+  margin: 0;
+}
+.ka-header .ka-tag {
+  font-size: 0.7rem;
+  color: var(--muted-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.ka-mock-banner {
+  background: rgba(230, 130, 30, 0.1);
+  border-bottom: 1px solid rgba(230, 130, 30, 0.3);
+  color: #f5a35c;
+  font-size: 0.75rem;
+  text-align: center;
+  padding: 0.4rem;
+}
+
+.ka-main { padding: 1.5rem; max-width: 1100px; margin: 0 auto; }
+
+.ka-eyebrow {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted-foreground);
+}
+.ka-title { font-family: var(--font-display); margin: 0.25rem 0 1.25rem; }
+
+.ka-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1rem;
+}
+
+.ka-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem;
+}
+.ka-card h2 { font-family: var(--font-display); font-size: 1rem; margin-top: 0; }
+
+.ka-trend-box {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  background: rgba(255,255,255,0.02);
+  padding: 0.4rem;
+}
+.ka-trend-delta { position: absolute; right: 0.4rem; top: 0.3rem; font-size: 0.7rem; font-weight: 600; }
+.ka-trend-up { color: var(--accent); }
+.ka-trend-down { color: #f5a35c; }
+.ka-trend-stable { color: var(--muted-foreground); }
+.ka-trend-svg { width: 100%; height: 60px; display: block; }
+.ka-trend-dates, .ka-trend-range {
+  display: flex; justify-content: space-between;
+  font-size: 0.65rem; color: var(--muted-foreground); margin-top: 0.15rem;
+}
+
+.ka-flag-pill {
+  display: inline-block;
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: rgba(82, 183, 136, 0.15);
+  color: var(--accent);
+  text-transform: capitalize;
+}
+
+.ka-footer {
+  text-align: center;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  padding: 1.5rem;
+}

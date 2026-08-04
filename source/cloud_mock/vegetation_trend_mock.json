@@ -1,0 +1,33 @@
+{
+  "_note": "Synthetic fixture shaped like the real /v1/dashboard/projects/{id}/dmrv response from ~/workspace/Karbon-africa/distributed-app (see DmrvDetail type, page.tsx line 118), plus a soil_node_inference block that does not exist in the real schema yet -- that's the part this edge node would add once WiFi sync (architecture doc Section 8) is implemented. Not wired to any backend; standalone mock only.",
+  "project_id": "mock-project-demo-plot-1",
+  "satellite_ndvi": [
+    { "measurement_timestamp": "2026-07-06T00:00:00Z", "ndvi_value": 0.62, "quality_grade": "A" },
+    { "measurement_timestamp": "2026-07-13T00:00:00Z", "ndvi_value": 0.64, "quality_grade": "A" },
+    { "measurement_timestamp": "2026-07-20T00:00:00Z", "ndvi_value": 0.61, "quality_grade": "B" },
+    { "measurement_timestamp": "2026-07-27T00:00:00Z", "ndvi_value": 0.58, "quality_grade": "A" },
+    { "measurement_timestamp": "2026-08-03T00:00:00Z", "ndvi_value": 0.55, "quality_grade": "A" }
+  ],
+  "iot_soil_moisture": [
+    { "measurement_timestamp": "2026-07-30T00:00:00Z", "moisture_percentage": 27.4, "soil_temperature_celsius": 21.8, "quality_grade": "A" },
+    { "measurement_timestamp": "2026-07-31T00:00:00Z", "moisture_percentage": 25.1, "soil_temperature_celsius": 22.0, "quality_grade": "A" },
+    { "measurement_timestamp": "2026-08-01T00:00:00Z", "moisture_percentage": 22.6, "soil_temperature_celsius": 22.3, "quality_grade": "A" },
+    { "measurement_timestamp": "2026-08-02T00:00:00Z", "moisture_percentage": 19.8, "soil_temperature_celsius": 22.7, "quality_grade": "B" },
+    { "measurement_timestamp": "2026-08-03T00:00:00Z", "moisture_percentage": 17.2, "soil_temperature_celsius": 23.1, "quality_grade": "B" }
+  ],
+  "soil_node_inference": {
+    "_note": "Extension proposal, not a real endpoint -- feeds from the edge node's RSMI/gas-index/flag pipeline (source/edge_node) once synced.",
+    "pot_a": {
+      "rsmi_trend": [0.42, 0.38, 0.33, 0.28, 0.24],
+      "gas_index_trend": [162.0, 158.4, 151.2, 149.0, 147.5],
+      "latest_flag": "moisture_low",
+      "model_version": "placeholder-literature-seeded-v0"
+    },
+    "pot_b": {
+      "rsmi_trend": [0.55, 0.53, 0.50, 0.49, 0.47],
+      "gas_index_trend": [170.2, 171.0, 168.5, 169.8, 167.1],
+      "latest_flag": "stable",
+      "model_version": "placeholder-literature-seeded-v0"
+    }
+  }
+}

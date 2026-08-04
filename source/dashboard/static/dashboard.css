@@ -1,0 +1,188 @@
+/* Karbon Assure dark/earthy theme, ported from
+   ~/workspace/Karbon-africa/distributed-app/web/app/globals.css :root */
+:root {
+  --background: #090C09;
+  --foreground: #EEE9E2;
+  --primary: #3D2B1F;
+  --primary-foreground: #F5EDE4;
+  --secondary: #120E0A;
+  --secondary-foreground: #C4B49A;
+  --accent: #52B788;
+  --accent-foreground: #080F0A;
+  --muted: #1A1410;
+  --muted-foreground: #8A7B68;
+  --card: #131009;
+  --card-foreground: #EEE9E2;
+  --border: #2E2318;
+  --destructive: #dc2626;
+  --brand-secondary: #8A5A47;
+  --brand-secondary-light: #B07A63;
+  --earth-warm: #C4A882;
+  --radius: 0.5rem;
+  --font-sans: ui-sans-serif, "DM Sans", system-ui, sans-serif;
+  --font-display: ui-serif, Georgia, "Fraunces", serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  min-height: 100vh;
+}
+
+.ka-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--secondary);
+}
+
+.ka-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: var(--foreground);
+  text-decoration: none;
+  font-family: var(--font-display);
+  font-weight: 600;
+}
+.ka-brand em { color: var(--accent); font-style: normal; }
+.ka-logo { height: 32px; width: 32px; object-fit: contain; border-radius: 6px; }
+
+.ka-nav a {
+  color: var(--secondary-foreground);
+  text-decoration: none;
+  margin-left: 1.25rem;
+  font-size: 0.9rem;
+}
+.ka-nav a:hover { color: var(--accent); }
+
+.ka-main { padding: 1.5rem; max-width: 1200px; margin: 0 auto; }
+
+.ka-page-title {
+  font-family: var(--font-display);
+  margin-bottom: 0.25rem;
+}
+.ka-page-sub { color: var(--muted-foreground); margin-top: 0; font-size: 0.9rem; }
+
+.ka-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+.ka-card h2, .ka-card h3 {
+  margin-top: 0;
+  font-family: var(--font-display);
+  font-size: 1rem;
+  color: var(--foreground);
+}
+
+.ka-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 1rem;
+}
+
+.ka-pot-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 1.5rem;
+}
+.ka-pot-column h2 {
+  font-family: var(--font-display);
+  color: var(--accent);
+}
+
+.ka-pot-pod { margin-bottom: 0.75rem; }
+.ka-pot-pod-label { font-size: 0.75rem; font-weight: 600; margin-bottom: 0.25rem; }
+
+.ka-trend-box {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  background: rgba(255,255,255,0.02);
+  padding: 0.4rem;
+}
+.ka-trend-stressed {
+  border-color: rgba(230, 130, 30, 0.4);
+  background: rgba(230, 130, 30, 0.08);
+}
+.ka-trend-delta {
+  position: absolute;
+  right: 0.4rem;
+  top: 0.3rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+.ka-trend-up { color: var(--accent); }
+.ka-trend-down { color: #f5a35c; }
+.ka-trend-stable { color: var(--muted-foreground); }
+.ka-trend-svg { width: 100%; height: 48px; display: block; }
+.ka-trend-dates, .ka-trend-range {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.65rem;
+  color: var(--muted-foreground);
+  margin-top: 0.15rem;
+}
+.ka-trend-empty {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  text-align: center;
+  padding: 1rem;
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+}
+
+.ka-flag {
+  border-radius: var(--radius);
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+}
+.ka-flag-name { font-size: 1.3rem; font-weight: 700; text-transform: capitalize; }
+.ka-flag-meta { font-size: 0.75rem; color: var(--muted-foreground); margin-top: 0.25rem; }
+
+.ka-flag-stable, .ka-flag-drought_onset, .ka-flag-moisture_low,
+.ka-flag-waterlogged_risk, .ka-flag-soil_health_degrading, .ka-flag-sensor_fault {
+  border-left: 4px solid var(--accent);
+}
+.ka-flag-drought_onset, .ka-flag-moisture_low { border-left-color: var(--brand-secondary-light); }
+.ka-flag-waterlogged_risk, .ka-flag-soil_health_degrading { border-left-color: #f5a35c; }
+.ka-flag-sensor_fault { border-left-color: var(--destructive); }
+
+.ka-flag-history-item {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.3rem 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.8rem;
+}
+.ka-flag-history-item:last-child { border-bottom: none; }
+.ka-flag-history-time { color: var(--muted-foreground); }
+
+.ka-landing { text-align: center; padding: 2.5rem 1rem; }
+.ka-landing h1 { font-family: var(--font-display); }
+.ka-landing-links { display: flex; gap: 1rem; justify-content: center; margin-top: 1.5rem; }
+
+.ka-button {
+  background: var(--accent);
+  color: var(--accent-foreground);
+  text-decoration: none;
+  padding: 0.6rem 1.2rem;
+  border-radius: var(--radius);
+  font-weight: 600;
+}
+
+.ka-footer {
+  text-align: center;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  padding: 1.5rem;
+}

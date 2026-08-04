@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="ka-card ka-landing">
+  <h1>Soil Health Edge Node</h1>
+  <p>Board-local dashboard for the two-pot trial. Pick a view:</p>
+  <div class="ka-landing-links">
+    <a class="ka-button" href="{{ url_for('raw_page') }}">Raw Sensor Stream</a>
+    <a class="ka-button" href="{{ url_for('inference_page') }}">Inference Charts</a>
+  </div>
+</div>
+{% endblock %}

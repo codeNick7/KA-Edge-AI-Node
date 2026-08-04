@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Karbon Assure — Soil Health Edge Node{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}">
+</head>
+<body>
+  <header class="ka-header">
+    <a class="ka-brand" href="{{ url_for('index') }}">
+      <img src="{{ url_for('static', filename='img/logo.png') }}" alt="Karbon Assure" class="ka-logo">
+      <span>Karbon Assure <em>Soil Health Edge Node</em></span>
+    </a>
+    <nav class="ka-nav">
+      <a href="{{ url_for('raw_page') }}">Raw Stream</a>
+      <a href="{{ url_for('inference_page') }}">Inference</a>
+    </nav>
+  </header>
+  <main class="ka-main">
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="ka-footer">Board-local dashboard · mock data source · not yet wired to real sensors</footer>
+</body>
+</html>

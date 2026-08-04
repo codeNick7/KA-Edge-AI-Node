@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Karbon Assure — Vegetation & Soil Trend (mock)</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="ka-mock-banner">
+    Standalone mock — synthetic data, not wired into distributed-app. See docs/plan/dashboard-prep-plan.md.
+  </div>
+  <header class="ka-header">
+    <img src="img/logo.png" alt="Karbon Assure" class="ka-logo">
+    <div>
+      <h1>Karbon Assure</h1>
+      <div class="ka-tag">Project Health — Vegetation &amp; Soil Trend</div>
+    </div>
+  </header>
+
+  <main class="ka-main">
+    <div class="ka-eyebrow">Project health</div>
+    <h2 class="ka-title">Demo Plot 1 — dMRV Trend</h2>
+
+    <div class="ka-grid">
+      <div class="ka-card">
+        <h2>Satellite NDVI (vegetation index)</h2>
+        <div id="chart-ndvi"></div>
+      </div>
+      <div class="ka-card">
+        <h2>IoT Soil Moisture</h2>
+        <div id="chart-moisture"></div>
+      </div>
+      <div class="ka-card">
+        <h2>Pot A — RSMI Trend <span id="flag-a" class="ka-flag-pill"></span></h2>
+        <div id="chart-rsmi-a"></div>
+      </div>
+      <div class="ka-card">
+        <h2>Pot B — RSMI Trend <span id="flag-b" class="ka-flag-pill"></span></h2>
+        <div id="chart-rsmi-b"></div>
+      </div>
+    </div>
+  </main>
+
+  <footer class="ka-footer">Mock cloud dashboard · synthetic fixture (vegetation_trend_mock.json) · patterns ported from distributed-app's TrendChart component</footer>
+
+  <script src="trend_chart.js"></script>
+  <script>
+    fetch("vegetation_trend_mock.json")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        var ndvi = data.satellite_ndvi;
+        var ndviValues = ndvi.map(function (r) { return r.ndvi_value; });
+        var ndviDates = ndvi.map(function (r) { return r.measurement_timestamp; });
+        document.getElementById("chart-ndvi").appendChild(
+          KA.trendChart(ndviValues, ndviDates, "#16a34a", "", false)
+        );
+
+        var moisture = data.iot_soil_moisture;
+        var moistureValues = moisture.map(function (r) { return r.moisture_percentage; });
+        var moistureDates = moisture.map(function (r) { return r.measurement_timestamp; });
+        var moistureStressed = moistureValues[moistureValues.length - 1] < 20;
+        document.getElementById("chart-moisture").appendChild(
+          KA.trendChart(moistureValues, moistureDates, "#2563eb", "%", moistureStressed)
+        );
+
+        ["a", "b"].forEach(function (potKey) {
+          var pot = data.soil_node_inference["pot_" + potKey];
+          var values = pot.rsmi_trend;
+          var dates = values.map(function (_, i) { return moistureDates[i] || moistureDates[moistureDates.length - 1]; });
+          document.getElementById("chart-rsmi-" + potKey).appendChild(
+            KA.trendChart(values, dates, potKey === "a" ? "#52B788" : "#8A5A47", "", false)
+          );
+          document.getElementById("flag-" + potKey).textContent = pot.latest_flag;
+        });
+      });
+  </script>
+</body>
+</html>
