@@ -1,5 +1,5 @@
-/* Karbon Assure dark/earthy theme, ported from
-   ~/workspace/Karbon-africa/distributed-app/web/app/globals.css :root */
+/* Karbon Assure dark/earthy theme — v2.0 dual-pot dashboard */
+/* Ported from ~/workspace/Karbon-africa/distributed-app/web/app/globals.css :root */
 :root {
   --background: #090C09;
   --foreground: #EEE9E2;
@@ -18,6 +18,7 @@
   --brand-secondary: #8A5A47;
   --brand-secondary-light: #B07A63;
   --earth-warm: #C4A882;
+  --sky-blue: #7BBFE0;
   --radius: 0.5rem;
   --font-sans: ui-sans-serif, "DM Sans", system-ui, sans-serif;
   --font-display: ui-serif, Georgia, "Fraunces", serif;
@@ -33,6 +34,7 @@ body {
   min-height: 100vh;
 }
 
+/* ── Header ──────────────────────────────────────────────────────────── */
 .ka-header {
   display: flex;
   align-items: center;
@@ -59,10 +61,12 @@ body {
   text-decoration: none;
   margin-left: 1.25rem;
   font-size: 0.9rem;
+  transition: color 0.15s;
 }
 .ka-nav a:hover { color: var(--accent); }
 
-.ka-main { padding: 1.5rem; max-width: 1200px; margin: 0 auto; }
+/* ── Layout ──────────────────────────────────────────────────────────── */
+.ka-main { padding: 1.5rem; max-width: 1400px; margin: 0 auto; }
 
 .ka-page-title {
   font-family: var(--font-display);
@@ -70,6 +74,67 @@ body {
 }
 .ka-page-sub { color: var(--muted-foreground); margin-top: 0; font-size: 0.9rem; }
 
+/* Two-column pot layout */
+.ka-pot-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2rem;
+}
+@media (max-width: 900px) {
+  .ka-pot-columns { grid-template-columns: 1fr; }
+}
+
+.ka-pot-column > h2 {
+  font-family: var(--font-display);
+  color: var(--accent);
+  margin-bottom: 0.2rem;
+}
+.ka-pot-column[data-pot="B"] > h2 { color: var(--sky-blue); }
+
+.ka-pot-subtitle {
+  color: var(--muted-foreground);
+  font-size: 0.78rem;
+  margin: 0 0 1rem 0;
+}
+
+/* ── Raw value cards (big live numbers) ──────────────────────────────── */
+.ka-raw-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.6rem;
+  margin-bottom: 1.25rem;
+}
+
+.ka-raw-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  transition: border-color 0.2s;
+}
+.ka-raw-card:hover { border-color: var(--accent); }
+.ka-raw-card--placeholder { opacity: 0.5; }
+
+.ka-raw-val {
+  font-size: 1.55rem;
+  font-weight: 700;
+  font-family: var(--font-display);
+  color: var(--foreground);
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+.ka-raw-label {
+  font-size: 0.7rem;
+  color: var(--muted-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* ── Charts / trend cards ────────────────────────────────────────────── */
 .ka-card {
   background: var(--card);
   border: 1px solid var(--border);
@@ -77,11 +142,27 @@ body {
   padding: 1rem;
   margin-bottom: 1rem;
 }
+.ka-card--placeholder { opacity: 0.55; }
 .ka-card h2, .ka-card h3 {
   margin-top: 0;
   font-family: var(--font-display);
   font-size: 1rem;
   color: var(--foreground);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.ka-placeholder-badge {
+  font-size: 0.62rem;
+  font-family: var(--font-sans);
+  color: var(--muted-foreground);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 0.35rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 400;
 }
 
 .ka-grid {
@@ -90,19 +171,7 @@ body {
   gap: 1rem;
 }
 
-.ka-pot-columns {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: 1.5rem;
-}
-.ka-pot-column h2 {
-  font-family: var(--font-display);
-  color: var(--accent);
-}
-
-.ka-pot-pod { margin-bottom: 0.75rem; }
-.ka-pot-pod-label { font-size: 0.75rem; font-weight: 600; margin-bottom: 0.25rem; }
-
+/* ── Trend chart sub-components ──────────────────────────────────────── */
 .ka-trend-box {
   position: relative;
   border: 1px solid var(--border);
@@ -121,10 +190,10 @@ body {
   font-size: 0.7rem;
   font-weight: 600;
 }
-.ka-trend-up { color: var(--accent); }
+.ka-trend-up   { color: var(--accent); }
 .ka-trend-down { color: #f5a35c; }
 .ka-trend-stable { color: var(--muted-foreground); }
-.ka-trend-svg { width: 100%; height: 48px; display: block; }
+.ka-trend-svg  { width: 100%; height: 48px; display: block; }
 .ka-trend-dates, .ka-trend-range {
   display: flex;
   justify-content: space-between;
@@ -141,6 +210,7 @@ body {
   color: var(--muted-foreground);
 }
 
+/* ── Inference flags ──────────────────────────────────────────────────── */
 .ka-flag {
   border-radius: var(--radius);
   padding: 0.75rem;
@@ -167,6 +237,7 @@ body {
 .ka-flag-history-item:last-child { border-bottom: none; }
 .ka-flag-history-time { color: var(--muted-foreground); }
 
+/* ── Landing page ────────────────────────────────────────────────────── */
 .ka-landing { text-align: center; padding: 2.5rem 1rem; }
 .ka-landing h1 { font-family: var(--font-display); }
 .ka-landing-links { display: flex; gap: 1rem; justify-content: center; margin-top: 1.5rem; }
@@ -178,8 +249,11 @@ body {
   padding: 0.6rem 1.2rem;
   border-radius: var(--radius);
   font-weight: 600;
+  transition: filter 0.15s;
 }
+.ka-button:hover { filter: brightness(1.1); }
 
+/* ── Footer ──────────────────────────────────────────────────────────── */
 .ka-footer {
   text-align: center;
   color: var(--muted-foreground);

@@ -1,0 +1,50 @@
+1. What could go wrong — build-phase risks worth watching
+
+Electrical
+
+Pull-up conflict on the shared BH1750 bus — flagged before, but worth testing early rather than assuming it's fine: two boards' onboard pull-ups in parallel could cause flaky reads at higher I2C speeds.
+3.3V rail current budget — you're now hanging 6 sensors off the same 3.3V pin (2×BME688, 2×BH1750, 2×capacitive). Individually each draws very little, but worth a quick multimeter current check with everything connected and running, just to confirm you're nowhere near whatever the onboard regulator is rated for. Cheap insurance against a mysterious brownout mid-trial.
+Cold solder joints on the ADR jumper mod — you already hit a loose-connection bug once this project; a bad rework on that tiny 0x77 pad is the most likely place for it to happen again. Multimeter continuity check before powering up, every time.
+
+Mechanical / physical
+
+Header-pin jumper wires shaking loose — same failure mode as your earlier BME688 debugging session, now multiplied across more wires on the breadboard hub. Worth a physical wiggle-test on every joint before you start the trial, not after readings look weird three days in.
+Water near electronics — soil moisture testing means watering near a board with exposed header pins and jumper wires. Keep the UNO Q and breadboard elevated/behind the pot, not in the splash zone.
+
+Firmware / software
+
+SD card + SPI on this board's core is new territory — you haven't stress-tested continuous logging yet. Worth running the SD write loop for at least a few hours before trial day, not discovering a write-failure-after-N-writes bug mid-collection.
+No RTC mentioned anywhere in your build — check whether the UNO Q keeps time across power cycles, or whether your Linux side needs to NTP-sync at boot. If a brief WiFi drop or reboot resets the clock, your evidence-record timestamps (which your own schema treats as ground truth) silently go wrong without erroring.
+Validity-gate-before-trend-logic ordering — your own PRD calls this out (Section 6) as the correct build order; skipping it under deadline pressure and bolting it on later is the most likely place corners get cut.
+
+Trial design
+
+Keep every non-experimental variable identical between Pot A and Pot B — same soil batch, same pot, same light exposure, same sensor placement geometry. Any asymmetry here (e.g. one BME688 hovering slightly closer to soil than the other) weakens your ability to claim the flag differences came from moisture, not sensor placement drift.
+Don't over-fit the decision tree to two data points — with one control pot and one drought pot, it's easy to accidentally build a tree that perfectly explains your two specific plants rather than a generalizable pattern. Keep thresholds close to the literature-seeded values and treat the trial as validation, not the sole source of truth — which is exactly the framing your PRD already takes, so stay disciplined about not drifting from it under time pressure.
+
+2. Likely jury questions — by panel background
+
+Given a mixed Qualcomm / EFY / Arduino panel, expect three distinct angles of scrutiny:
+
+From the Qualcomm side (compute/architecture focus):
+
+"Why split work across STM32 and QRB2210 instead of doing it all on the Linux side, or all on the MCU?" — have your hybrid-architecture argument (Section 3) ready verbatim, it's already strong.
+"What's the actual CPU/RAM utilization of your inference pipeline on the QRB2210?" — if you haven't measured this, do it before the demo. A decision tree is trivially light; be ready to say so honestly rather than oversell the "AI" framing.
+"Why a decision tree and not a lightweight neural model — is that a hardware constraint or a deliberate choice?" — your explainability argument (Slide 9 of your deck) answers this well; lead with that, not with "we didn't have time."
+"How does the Arduino Bridge RPC actually work, and what's its latency?" — be ready with real numbers if you've measured, or an honest "haven't benchmarked it yet" if not.
+
+From the Arduino side (board/ecosystem focus):
+
+"Why UNO Q specifically over other boards in the lineup?" — tie back to your split-compute argument.
+"Did you hit any board-specific issues?" — you genuinely have a good, honest answer here: the header-pin I2C bug you found and worked around is a legitimate, verifiable finding. Judges from the Arduino team will likely respect a documented real bug more than a suspiciously smooth build story.
+"Could another maker reproduce this build from your documentation?" — your wiring schematic and connection tables are built for exactly this; make sure the final report includes them clearly.
+
+From the EFY / practical-applicability side:
+
+"What does this actually cost, fully built?" — have your BOM total ready in ₹, not just per-part DigiKey pricing.
+"Does this device measure carbon?" — expect this question directly, likely early. Your non-claim statement is your strongest asset here — deliver it confidently and unprompted rather than waiting to be cornered into it.
+"How would this scale from one prototype to a real fleet across many farms?" — your roadmap section already answers this; be ready to speak to it without reading it verbatim.
+"How confident are you in the decision tree given ~2 weeks of self-collected data?" — the honest answer ("literature-seeded thresholds validated against a short controlled trial, not a large statistically powered study") is a legitimate scientific answer — own it rather than overstate certainty.
+"What happens to accuracy as sensors drift or degrade in the field over months?" — you likely don't have an answer built yet; it's fine to name this as a known open item for the production roadmap rather than dodge it.
+
+The throughline across all three panels: your strongest move is leaning into what's honestly incomplete or imperfect — the header-pin bug, the small trial size, the non-claim on SOC — rather than smoothing them over. A jury with actual Qualcomm/Arduino engineers will spot overclaiming fast; the documented rigor you've already built into the PRD and citations doc is your real differentiator, so let it show in how you answer, not just in the paperwork.

@@ -2,26 +2,68 @@
 {% block title %}Raw Sensor Stream — Karbon Assure{% endblock %}
 {% block content %}
 <h1 class="ka-page-title">Raw Sensor Stream</h1>
-<p class="ka-page-sub">Pot A and Pot B, side by side, last {{ 60 }} readings. Auto-refreshes every 10s.</p>
+<p class="ka-page-sub">
+  Pot A (BME688 @0x76 · Soil A0) and Pot B (BME688 @0x77 · Soil A1) — live readings, 1 s cadence.
+  Light sensor: placeholder until BH1750 wired.
+</p>
 
-<div class="ka-pot-columns" data-sensors="moisture_pct,gas_index,temp_c,light_lux">
+<div class="ka-pot-columns">
   {% for pot in pots %}
   <section class="ka-pot-column" data-pot="{{ pot }}">
     <h2>Pot {{ pot }}</h2>
-    <div class="ka-card">
-      <h3>Moisture (%)</h3>
-      <div class="ka-chart" id="chart-moisture_pct-{{ pot }}"></div>
+    <p class="ka-pot-subtitle"></p>
+
+    {# ── Raw value cards ───────────────────────────────────────────── #}
+    <div class="ka-raw-cards">
+      <div class="ka-raw-card" id="raw-temp_c-{{ pot }}">
+        <span class="ka-raw-val">—</span>
+        <span class="ka-raw-label">Temperature</span>
+      </div>
+      <div class="ka-raw-card" id="raw-humidity_pct-{{ pot }}">
+        <span class="ka-raw-val">—</span>
+        <span class="ka-raw-label">Humidity</span>
+      </div>
+      <div class="ka-raw-card" id="raw-pressure_hpa-{{ pot }}">
+        <span class="ka-raw-val">—</span>
+        <span class="ka-raw-label">Pressure</span>
+      </div>
+      <div class="ka-raw-card" id="raw-gas_index-{{ pot }}">
+        <span class="ka-raw-val">—</span>
+        <span class="ka-raw-label">Gas (kΩ)</span>
+      </div>
+      <div class="ka-raw-card" id="raw-moisture_pct-{{ pot }}">
+        <span class="ka-raw-val">—</span>
+        <span class="ka-raw-label">Soil Moisture</span>
+      </div>
+      <div class="ka-raw-card ka-raw-card--placeholder" id="raw-light_lux-{{ pot }}">
+        <span class="ka-raw-val">—</span>
+        <span class="ka-raw-label">Light (pending)</span>
+      </div>
     </div>
-    <div class="ka-card">
-      <h3>Gas / IAQ Index</h3>
-      <div class="ka-chart" id="chart-gas_index-{{ pot }}"></div>
-    </div>
+
+    {# ── Trend charts ──────────────────────────────────────────────── #}
     <div class="ka-card">
       <h3>Temperature (°C)</h3>
       <div class="ka-chart" id="chart-temp_c-{{ pot }}"></div>
     </div>
     <div class="ka-card">
-      <h3>Light (lux)</h3>
+      <h3>Humidity (%)</h3>
+      <div class="ka-chart" id="chart-humidity_pct-{{ pot }}"></div>
+    </div>
+    <div class="ka-card">
+      <h3>Pressure (hPa)</h3>
+      <div class="ka-chart" id="chart-pressure_hpa-{{ pot }}"></div>
+    </div>
+    <div class="ka-card">
+      <h3>Gas Resistance (kΩ)</h3>
+      <div class="ka-chart" id="chart-gas_index-{{ pot }}"></div>
+    </div>
+    <div class="ka-card">
+      <h3>Soil Moisture (%)</h3>
+      <div class="ka-chart" id="chart-moisture_pct-{{ pot }}"></div>
+    </div>
+    <div class="ka-card ka-card--placeholder">
+      <h3>Light — lux <span class="ka-placeholder-badge">pending</span></h3>
       <div class="ka-chart" id="chart-light_lux-{{ pot }}"></div>
     </div>
   </section>
