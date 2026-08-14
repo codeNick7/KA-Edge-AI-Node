@@ -88,8 +88,9 @@ class RealDataSource:
                 ):
                     continue
                 records.append(record)
-        records.sort(key=lambda r: r["sample_index"])
+        records.sort(key=lambda r: r.get("received_at", ""))
         return records
+
 
     def _to_raw_row(self, record: dict) -> dict:
         return {

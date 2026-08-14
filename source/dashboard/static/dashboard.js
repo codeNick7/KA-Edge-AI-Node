@@ -8,9 +8,10 @@
 //   - CSV downloads.
 window.KA = window.KA || {};
 
-KA.REFRESH_MS  = 1000;   // 1 Hz — matches sketch 1-second logging cadence
+KA.REFRESH_MS  = 5000;   // 5s auto-refresh cadence
 KA.N_LIVE      = 60;     // points fetched on each live tick (tail only)
 KA.currentFilter = "overall"; // "5m" | "15m" | "1h" | "today" | "week" | "overall"
+
 
 // Sensor definitions — shown as raw-value cards + trend charts
 // key must match the field names returned by /api/raw
@@ -220,10 +221,16 @@ KA.initRawPage = function (pots) {
   });
 
   function liveTick() {
+    KA.refreshStatus();
     pots.forEach(function (pot) {
       fetchJson("/api/raw?pot=" + pot + "&n=" + KA.N_LIVE)
         .then(function (rows) {
           if (!rows || !rows.length) return;
+
+          // Always update top value cards with latest reading
+          sensors.forEach(function (sensor) {
+            updateRawCard(pot, sensor, SENSOR_META[sensor], rows);
+          });
 
           // Filter only rows strictly newer than the last seen timestamp
           var newRows = rows.filter(function (r) {
@@ -233,17 +240,13 @@ KA.initRawPage = function (pots) {
           if (newRows.length) {
             _lastTs[pot] = newRows[newRows.length - 1].timestamp;
             _appendRows(pot, newRows);
-            sensors.forEach(function (sensor) {
-              updateRawCard(pot, sensor, SENSOR_META[sensor], rows);
-            });
-            // Re-render chart so the rolling window advances smoothly
-            _renderCharts(pot);
           }
+
+          // Re-render chart so the rolling window and axis timestamps advance smoothly
+          _renderCharts(pot);
         })
         .catch(function (e) { console.warn("live tick fetch error:", e); });
     });
-    // Refresh status bar every 10 seconds
-    if ((Date.now() / 1000 | 0) % 10 === 0) KA.refreshStatus();
   }
 
   setInterval(liveTick, KA.REFRESH_MS);
@@ -330,6 +333,8 @@ KA.initInferencePage = function (pots) {
       fetchJson("/api/inference?pot=" + pot + "&n=" + KA.N_LIVE)
         .then(function (rows) {
           if (!rows || !rows.length) return;
+          updateFlagUI(pot, rows);
+
           var newRows = rows.filter(function (r) {
             return !_lastInfTs[pot] || r.timestamp > _lastInfTs[pot];
           });
@@ -343,9 +348,8 @@ KA.initInferencePage = function (pots) {
                 lastRecordedTs = r.timestamp;
               }
             });
-            renderInfChart(pot);
-            updateFlagUI(pot, rows);
           }
+          renderInfChart(pot);
         })
         .catch(function (e) { console.warn("inference live tick error:", e); });
     });
@@ -353,3 +357,4 @@ KA.initInferencePage = function (pots) {
 
   setInterval(liveTick, KA.REFRESH_MS);
 };
+
