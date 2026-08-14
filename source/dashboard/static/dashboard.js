@@ -51,41 +51,48 @@ function fmtTs(iso) {
 }
 
 // ── Time range filtering ───────────────────────────────────────────────────
-function _isDateInFilter(isoString, filter) {
-  if (!isoString || filter === "overall") return true;
-  var d = new Date(isoString).getTime();
-  if (isNaN(d)) return true;
-  var now = Date.now();
-  if (filter === "today") {
-    var todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-    return d >= todayStart.getTime();
-  }
-  if (filter === "week") {
-    var sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
-    return d >= sevenDaysAgo;
-  }
-  return true;
-}
-
 function _filterDataset(values, dates, filter) {
-  if (filter === "overall" || !dates || !dates.length) {
+  if (!dates || !dates.length || filter === "overall") {
     return { values: values, dates: dates };
   }
+
+  // Use the timestamp of the latest sample as reference point
+  var lastIso = dates[dates.length - 1];
+  var refTime = new Date(lastIso).getTime();
+  if (isNaN(refTime)) refTime = Date.now();
+
+  var cutoff = 0;
+  if (filter === "5m") {
+    cutoff = refTime - (5 * 60 * 1000);
+  } else if (filter === "15m") {
+    cutoff = refTime - (15 * 60 * 1000);
+  } else if (filter === "1h") {
+    cutoff = refTime - (60 * 60 * 1000);
+  } else if (filter === "today") {
+    var todayStart = new Date(refTime);
+    todayStart.setHours(0, 0, 0, 0);
+    cutoff = todayStart.getTime();
+  } else if (filter === "week") {
+    cutoff = refTime - (7 * 24 * 60 * 60 * 1000);
+  }
+
   var filtValues = [];
   var filtDates = [];
   for (var i = 0; i < dates.length; i++) {
-    if (_isDateInFilter(dates[i], filter)) {
+    var t = new Date(dates[i]).getTime();
+    if (!isNaN(t) && t >= cutoff) {
       filtDates.push(dates[i]);
       filtValues.push(values[i]);
     }
   }
-  // If filter produces too few points (e.g. at the start of a day), show available points
+
+  // If filtered slice has fewer than 2 points, return whatever is available
   if (filtValues.length < 2 && values.length >= 2) {
     return { values: values, dates: dates };
   }
   return { values: filtValues, dates: filtDates };
 }
+
 
 function _setupFilterListeners(groupId, onFilterChange) {
   var group = document.getElementById(groupId);

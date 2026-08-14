@@ -16,11 +16,16 @@
 <div class="ka-filter-bar">
   <span class="ka-filter-label">Time Range:</span>
   <div class="ka-filter-group" id="raw-filter-group">
+    <button type="button" class="ka-filter-btn" data-filter="5m">5 Mins</button>
+    <button type="button" class="ka-filter-btn" data-filter="15m">15 Mins</button>
+    <button type="button" class="ka-filter-btn" data-filter="1h">1 Hour</button>
     <button type="button" class="ka-filter-btn" data-filter="today">Today</button>
     <button type="button" class="ka-filter-btn" data-filter="week">This Week</button>
     <button type="button" class="ka-filter-btn active" data-filter="overall">Overall</button>
   </div>
 </div>
+
+
 
 <div class="ka-pot-columns">
   {% for pot in pots %}

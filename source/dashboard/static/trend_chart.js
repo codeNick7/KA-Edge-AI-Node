@@ -102,10 +102,11 @@ KA.trendChart = function (values, dates, colour, unit, stressed) {
   box.appendChild(svg);
   wrap.appendChild(box);
 
+  var spanMs = (firstDate && lastDate) ? (new Date(lastDate).getTime() - new Date(firstDate).getTime()) : 0;
   var dateRow = KA.rowOf(
-    firstDate ? KA.fmtShortDate(firstDate) : "",
+    firstDate ? KA.fmtTimeOrDate(firstDate, spanMs) : "",
     "trend",
-    lastDate ? KA.fmtShortDate(lastDate) : ""
+    lastDate ? KA.fmtTimeOrDate(lastDate, spanMs) : ""
   );
   dateRow.className = "ka-trend-dates";
   wrap.appendChild(dateRow);
@@ -130,8 +131,24 @@ KA.rowOf = function () {
   return row;
 };
 
+KA.fmtTimeOrDate = function (iso, spanMs) {
+  var d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  // If span is within 24 hours, show readable time (HH:MM:SS if under 15m, HH:MM otherwise)
+  if (spanMs && spanMs < 15 * 60 * 1000) {
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  }
+  if (!spanMs || spanMs < 24 * 60 * 60 * 1000) {
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+  // If spanning multiple days, show Month Day + HH:MM
+  return d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " +
+         d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+};
+
 KA.fmtShortDate = function (iso) {
   var d = new Date(iso);
   if (isNaN(d.getTime())) return "";
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 };
+
