@@ -260,3 +260,55 @@ body {
   font-size: 0.75rem;
   padding: 1.5rem;
 }
+
+/* ── Status bar ──────────────────────────────────────────────────────── */
+.ka-status-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.5rem;
+  align-items: center;
+  background: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.55rem 1rem;
+  font-size: 0.78rem;
+  color: var(--muted-foreground);
+  margin-bottom: 1.25rem;
+}
+.ka-status-bar strong { color: var(--foreground); }
+
+/* ── Per-pot download button ─────────────────────────────────────────── */
+.ka-pot-actions {
+  margin: 0.5rem 0 1rem;
+}
+.ka-btn-download {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: var(--primary);
+  color: var(--primary-foreground);
+  text-decoration: none;
+  padding: 0.4rem 0.9rem;
+  border-radius: var(--radius);
+  font-size: 0.8rem;
+  font-weight: 600;
+  transition: filter 0.15s;
+}
+.ka-btn-download:hover { filter: brightness(1.2); }
+
+/* ── Nav download link ───────────────────────────────────────────────── */
+.ka-nav-download {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: var(--accent);
+  color: var(--accent-foreground) !important;
+  padding: 0.3rem 0.75rem;
+  border-radius: var(--radius);
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-decoration: none;
+  transition: filter 0.15s;
+}
+.ka-nav-download:hover { filter: brightness(1.1); }
+

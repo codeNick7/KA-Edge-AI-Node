@@ -3,9 +3,14 @@
 {% block content %}
 <h1 class="ka-page-title">Raw Sensor Stream</h1>
 <p class="ka-page-sub">
-  Pot A (BME688 @0x76 · Soil A0) and Pot B (BME688 @0x77 · Soil A1) — live readings, 1 s cadence.
+  Pot A (BME688 @0x76 · Soil A1) and Pot B (BME688 @0x77 · Soil A0) — live readings, 1 s cadence.
   Light sensor: placeholder until BH1750 wired.
 </p>
+
+{# ── Status bar — collecting since, reading counts, NTP sync ─── #}
+<div class="ka-status-bar" id="ka-status-bar">
+  <span>Loading status…</span>
+</div>
 
 <div class="ka-pot-columns">
   {% for pot in pots %}
@@ -39,6 +44,13 @@
         <span class="ka-raw-val">—</span>
         <span class="ka-raw-label">Light (pending)</span>
       </div>
+    </div>
+
+    {# ── Per-pot CSV download ────────────────────────────────────────── #}
+    <div class="ka-pot-actions">
+      <a href="/api/download/csv?pot={{ pot }}" class="ka-btn-download" id="ka-download-pot{{ pot }}-btn">
+        ⬇ Download Pot {{ pot }} CSV
+      </a>
     </div>
 
     {# ── Trend charts ──────────────────────────────────────────────── #}

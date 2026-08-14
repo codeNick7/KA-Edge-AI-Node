@@ -15,11 +15,12 @@
     <nav class="ka-nav">
       <a href="{{ url_for('raw_page') }}">Raw Stream</a>
       <a href="{{ url_for('inference_page') }}">Inference</a>
+      <a href="/api/download/csv" class="ka-nav-download" id="ka-download-all-btn" title="Download all sensor readings as CSV">⬇ Download CSV</a>
     </nav>
   </header>
   <main class="ka-main">
     {% block content %}{% endblock %}
   </main>
-  <footer class="ka-footer">Karbon Assure Edge Node · Pot A (BME688 @0x76 · Soil A0) · Pot B (BME688 @0x77 · Soil A1) · 1 Hz live</footer>
+  <footer class="ka-footer">Karbon Assure Edge Node · Pot A (BME688 @0x76 · Soil A1) · Pot B (BME688 @0x77 · Soil A0) · Wire1/Qwiic · 1 Hz live</footer>
 </body>
 </html>

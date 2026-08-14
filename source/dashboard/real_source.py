@@ -1,12 +1,12 @@
 """Real data source for both Pot A and Pot B.
 
-Both pots now have physical sensors wired:
-  Pot A — BME688 @0x76 (I²C), Cytron soil sensor on A0
-  Pot B — BME688 @0x77 (I²C), Cytron soil sensor on A1
+Hardware confirmed 2026-08-14:
+  Pot A — BME688 @0x76 (Wire1/Qwiic), Cytron soil sensor on A1
+  Pot B — BME688 @0x77 (Wire1/Qwiic), Cytron soil sensor on A0
 
-Readings arrive from the sketch (v6.0) over Bridge, are parsed by
-KA-Edge-source/python/main.py (v2.0), and hand-offed to two JSONL files:
-  pot_a_readings.jsonl
+Readings arrive from sketch v7.0 over Bridge, are parsed by
+KA-Edge-source/python/main.py (v3.0), and appended to two JSONL files:
+  pot_a_readings.jsonl   (grows across restarts — full history preserved)
   pot_b_readings.jsonl
 
 Each JSONL record has:
@@ -14,11 +14,11 @@ Each JSONL record has:
   gas_kohm, light_lux, moisture_pct, received_at
 
 Notes:
-- gas_kohm is Adafruit_BME680's raw gas_resistance, NOT Bosch BSEC IAQ.
-  BSEC integration is a separate follow-up (see PRD). Don't compare
-  numerically with mock_source's 0–500 IAQ scale.
+- gas_kohm is Adafruit_BME680's raw gas_resistance / 1000, NOT Bosch BSEC IAQ.
 - light_lux is 0.00 (placeholder) until BH1750 is physically wired.
 - moisture_pct is a real Cytron ADC reading for both pots.
+- Data is persistent: files are appended on restart so the full trend
+  from the first-ever reading is always available.
 """
 
 import json
@@ -31,12 +31,11 @@ from edge_node.validity import check_validity
 from .mock_source import MODEL_VERSION
 
 # Must match KA-Edge-source/python/main.py's DATA_DIR and filenames.
-# This path is proven host-visible (only the project directory is accessible
-# from within the App Lab sandbox — see main.py's comment for details).
 _BOARD_DATA_DIR = "/home/arduino/ArduinoApps/test-sensors/python/data"
 
 DEFAULT_POT_A_PATH = os.path.join(_BOARD_DATA_DIR, "pot_a_readings.jsonl")
 DEFAULT_POT_B_PATH = os.path.join(_BOARD_DATA_DIR, "pot_b_readings.jsonl")
+DEFAULT_SESSION_LOG = os.path.join(_BOARD_DATA_DIR, "session_log.jsonl")
 
 # Fallback for JSONL rows written before light_lux existed in the payload.
 PLACEHOLDER_LIGHT_LUX = 400.0
@@ -54,8 +53,10 @@ class RealDataSource:
         self,
         pot_a_path: str = DEFAULT_POT_A_PATH,
         pot_b_path: str = DEFAULT_POT_B_PATH,
+        session_log_path: str = DEFAULT_SESSION_LOG,
     ):
         self._paths = {"A": pot_a_path, "B": pot_b_path}
+        self._session_log = session_log_path
 
     def _load_records(self, pot: str) -> list[dict]:
         path = self._paths[pot]
@@ -94,9 +95,12 @@ class RealDataSource:
         }
 
     def get_raw(self, pot: str, n: int) -> list[dict]:
+        """Return the last n raw rows for pot. n=0 returns the full history."""
         if pot not in self._paths:
             raise ValueError(f"RealDataSource: unknown pot {pot!r}")
-        records = self._load_records(pot)[-n:]
+        records = self._load_records(pot)
+        if n and n > 0:
+            records = records[-n:]
         return [self._to_raw_row(r) for r in records]
 
     def get_inference(self, pot: str, n: int) -> list[dict]:
@@ -136,4 +140,51 @@ class RealDataSource:
                     "model_version": MODEL_VERSION,
                 }
             )
-        return results[-n:]
+        if n and n > 0:
+            return results[-n:]
+        return results
+
+    def get_status(self) -> dict:
+        """Return session and collection metadata for the dashboard status bar."""
+        status = {
+            "collecting_since": None,
+            "last_reading_at": None,
+            "total_readings_a": 0,
+            "total_readings_b": 0,
+            "ntp_synced": None,
+            "ntp_offset_s": None,
+            "session_started_at": None,
+        }
+
+        # Count readings and find first/last timestamps from JSONL files
+        for pot, key_total, key_first, key_last in [
+            ("A", "total_readings_a", "_first_a", "_last_a"),
+            ("B", "total_readings_b", "_first_b", "_last_b"),
+        ]:
+            records = self._load_records(pot)
+            total = len(records)
+            status[key_total] = total
+            if records:
+                first_ts = records[0].get("received_at")
+                last_ts = records[-1].get("received_at")
+                # collecting_since = earliest timestamp across both pots
+                if status["collecting_since"] is None or (first_ts and first_ts < status["collecting_since"]):
+                    status["collecting_since"] = first_ts
+                # last_reading_at = most recent timestamp across both pots
+                if status["last_reading_at"] is None or (last_ts and last_ts > status["last_reading_at"]):
+                    status["last_reading_at"] = last_ts
+
+        # Read most recent session_log entry for NTP info
+        if os.path.exists(self._session_log):
+            try:
+                with open(self._session_log) as f:
+                    lines = [l.strip() for l in f if l.strip()]
+                if lines:
+                    latest_session = json.loads(lines[-1])
+                    status["ntp_synced"] = latest_session.get("ntp_synced")
+                    status["ntp_offset_s"] = latest_session.get("ntp_offset_s")
+                    status["session_started_at"] = latest_session.get("started_at")
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        return status

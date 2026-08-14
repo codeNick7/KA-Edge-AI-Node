@@ -1,5 +1,9 @@
-// v6.0 — dual-pot: BME688@0x76 + A0 (Pot A), BME688@0x77 + A1 (Pot B)
+// v7.0 — dual-pot: BME688@0x76 + A1 (Pot A), BME688@0x77 + A0 (Pot B)
+// I²C bus: Wire1 (Qwiic connector) — confirmed by hardware diagnostic 2026-08-14.
+// Soil pins: Pot A → A1, Pot B → A0 (confirmed by hardware diagnostic).
 // BH1750 light sensor: placeholder fields (0.00) until physically wired.
+//   TODO BH1750: when wired, add #include <hp_BH1750.h>, call begin() in doInit(),
+//   replace LIGHT_PLACEHOLDER with real lux readings. Supply I2C address per pot.
 // CSV header:
 //   #,millis_ms,tempA_C,humA_pct,pressA_hPa,gasA_KOhm,
 //   tempB_C,humB_pct,pressB_hPa,gasB_KOhm,
@@ -17,20 +21,20 @@ const char *LOG_FILENAME = "sensor_log.csv";
 SdFat sd;
 File dataFile;
 
-// Pot A — BME688 at I2C address 0x76
-Adafruit_BME680 bmeA;
+// Pot A — BME688 at I2C address 0x76, on Wire1 (Qwiic connector)
+Adafruit_BME680 bmeA(&Wire1);
 bool bmeAReady = false;
 
-// Pot B — BME688 at I2C address 0x77
-Adafruit_BME680 bmeB;
+// Pot B — BME688 at I2C address 0x77, on Wire1 (Qwiic connector)
+Adafruit_BME680 bmeB(&Wire1);
 bool bmeBReady = false;
 
 bool cardReady = false;
 
 // ── Soil moisture — Cytron capacitive sensor (inverted: dry = high ADC) ──
-// Pot A → A0 | Pot B → A1
-const int SOIL_PIN_A = A0;
-const int SOIL_PIN_B = A1;
+// Pot A → A1 | Pot B → A0  (confirmed by hardware diagnostic 2026-08-14)
+const int SOIL_PIN_A = A1;
+const int SOIL_PIN_B = A0;
 
 // Calibration: dry air ≈ 1020 ADC (5 V), saturated ≈ 350 ADC (~1.71 V).
 // These values are typical for the Cytron CACTUS sensor on a 5 V supply.
