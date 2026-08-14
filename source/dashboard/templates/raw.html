@@ -12,6 +12,16 @@
   <span>Loading status…</span>
 </div>
 
+{# ── Time range filter ─────────────────────────────────────────── #}
+<div class="ka-filter-bar">
+  <span class="ka-filter-label">Time Range:</span>
+  <div class="ka-filter-group" id="raw-filter-group">
+    <button type="button" class="ka-filter-btn" data-filter="today">Today</button>
+    <button type="button" class="ka-filter-btn" data-filter="week">This Week</button>
+    <button type="button" class="ka-filter-btn active" data-filter="overall">Overall</button>
+  </div>
+</div>
+
 <div class="ka-pot-columns">
   {% for pot in pots %}
   <section class="ka-pot-column" data-pot="{{ pot }}">

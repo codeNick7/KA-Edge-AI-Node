@@ -4,6 +4,16 @@
 <h1 class="ka-page-title">Inference</h1>
 <p class="ka-page-sub">Pot A and Pot B, separate. Placeholder literature-seeded tree — see docs/plan/decision-tree-prep-plan.md.</p>
 
+{# ── Time range filter ─────────────────────────────────────────── #}
+<div class="ka-filter-bar">
+  <span class="ka-filter-label">Time Range:</span>
+  <div class="ka-filter-group" id="inference-filter-group">
+    <button type="button" class="ka-filter-btn" data-filter="today">Today</button>
+    <button type="button" class="ka-filter-btn" data-filter="week">This Week</button>
+    <button type="button" class="ka-filter-btn active" data-filter="overall">Overall</button>
+  </div>
+</div>
+
 <div class="ka-pot-columns">
   {% for pot in pots %}
   <section class="ka-pot-column" data-pot="{{ pot }}">

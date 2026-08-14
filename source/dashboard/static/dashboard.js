@@ -1,11 +1,15 @@
-// dashboard.js — Karbon Assure dual-pot live dashboard (v3.0)
-// Changes: full history loaded on page load (n=0), live tail appended every
-// second. Corrected pot labels (A→A1, B→A0). Status bar populated from
-// /api/status. Download CSV button wired.
+// dashboard.js — Karbon Assure dual-pot live dashboard (v3.1)
+// Features:
+//   - Full history loaded on page load (n=0), live tail appended every second.
+//   - Time range filters: "Today", "This Week", "Overall".
+//   - Corrected pot labels (Pot A: 0x76/A1, Pot B: 0x77/A0).
+//   - Status bar with collecting-since date, counts, and NTP sync status.
+//   - Download CSV button.
 window.KA = window.KA || {};
 
 KA.REFRESH_MS  = 1000;   // 1 Hz — matches sketch 1-second logging cadence
 KA.N_LIVE      = 60;     // points fetched on each live tick (tail only)
+KA.currentFilter = "overall"; // "today" | "week" | "overall"
 
 // Sensor definitions — shown as raw-value cards + trend charts
 // key must match the field names returned by /api/raw
@@ -46,6 +50,59 @@ function fmtTs(iso) {
   } catch (e) { return iso; }
 }
 
+// ── Time range filtering ───────────────────────────────────────────────────
+function _isDateInFilter(isoString, filter) {
+  if (!isoString || filter === "overall") return true;
+  var d = new Date(isoString).getTime();
+  if (isNaN(d)) return true;
+  var now = Date.now();
+  if (filter === "today") {
+    var todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    return d >= todayStart.getTime();
+  }
+  if (filter === "week") {
+    var sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
+    return d >= sevenDaysAgo;
+  }
+  return true;
+}
+
+function _filterDataset(values, dates, filter) {
+  if (filter === "overall" || !dates || !dates.length) {
+    return { values: values, dates: dates };
+  }
+  var filtValues = [];
+  var filtDates = [];
+  for (var i = 0; i < dates.length; i++) {
+    if (_isDateInFilter(dates[i], filter)) {
+      filtDates.push(dates[i]);
+      filtValues.push(values[i]);
+    }
+  }
+  // If filter produces too few points (e.g. at the start of a day), show available points
+  if (filtValues.length < 2 && values.length >= 2) {
+    return { values: values, dates: dates };
+  }
+  return { values: filtValues, dates: filtDates };
+}
+
+function _setupFilterListeners(groupId, onFilterChange) {
+  var group = document.getElementById(groupId);
+  if (!group) return;
+  var btns = group.querySelectorAll(".ka-filter-btn");
+  btns.forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      btns.forEach(function (b) { b.classList.remove("active"); });
+      btn.classList.add("active");
+      KA.currentFilter = btn.getAttribute("data-filter") || "overall";
+      if (typeof onFilterChange === "function") {
+        onFilterChange();
+      }
+    });
+  });
+}
+
 // ── status bar ─────────────────────────────────────────────────────────────
 KA.refreshStatus = function () {
   fetchJson("/api/status").then(function (s) {
@@ -79,8 +136,6 @@ function updateRawCard(pot, sensor, meta, rows) {
 }
 
 // ── chart state — per-pot, per-sensor history buffer ──────────────────────
-// Stores {values: [], dates: []} so we can append live points without
-// re-fetching the entire history on every tick.
 var _chartData = {};   // _chartData[pot][sensor] = {values, dates}
 
 function _ensureChartData(pot, sensor) {
@@ -108,7 +163,8 @@ function _renderCharts(pot) {
     if (!container) return;
     var buf = _ensureChartData(pot, sensor);
     if (!buf.values.length) return;
-    var chart = KA.trendChart(buf.values, buf.dates, POT_COLOUR[pot], SENSOR_META[sensor].unit, false);
+    var filt = _filterDataset(buf.values, buf.dates, KA.currentFilter);
+    var chart = KA.trendChart(filt.values, filt.dates, POT_COLOUR[pot], SENSOR_META[sensor].unit, false);
     container.innerHTML = "";
     container.appendChild(chart);
   });
@@ -127,6 +183,11 @@ KA.initRawPage = function (pots) {
     }
     var sub = document.querySelector("[data-pot='" + pot + "'] .ka-pot-subtitle");
     if (sub) sub.textContent = POT_LABEL[pot] || "";
+  });
+
+  // Setup time range filter buttons
+  _setupFilterListeners("raw-filter-group", function () {
+    pots.forEach(_renderCharts);
   });
 
   // Load full history on page load, then refresh status bar
@@ -169,7 +230,7 @@ KA.initRawPage = function (pots) {
         })
         .catch(function (e) { console.warn("live tick fetch error:", e); });
     });
-    // Refresh status bar every 10 seconds (not every tick)
+    // Refresh status bar every 10 seconds
     if ((Date.now() / 1000 | 0) % 10 === 0) KA.refreshStatus();
   }
 
@@ -184,7 +245,8 @@ KA.initInferencePage = function (pots) {
   function renderInfChart(pot) {
     var chartContainer = document.getElementById("chart-rsmi-" + pot);
     if (!chartContainer || !_infChartData[pot] || !_infChartData[pot].rsmi.length) return;
-    var chart = KA.trendChart(_infChartData[pot].rsmi, _infChartData[pot].dates, POT_COLOUR[pot], "", false);
+    var filt = _filterDataset(_infChartData[pot].rsmi, _infChartData[pot].dates, KA.currentFilter);
+    var chart = KA.trendChart(filt.values, filt.dates, POT_COLOUR[pot], "", false);
     chartContainer.innerHTML = "";
     chartContainer.appendChild(chart);
   }
@@ -227,6 +289,11 @@ KA.initInferencePage = function (pots) {
       });
     }
   }
+
+  // Setup time range filter buttons
+  _setupFilterListeners("inference-filter-group", function () {
+    pots.forEach(renderInfChart);
+  });
 
   // Initial load: full history
   pots.forEach(function (pot) {
