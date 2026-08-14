@@ -178,61 +178,95 @@ KA.initRawPage = function (pots) {
 
 // ── Inference page ─────────────────────────────────────────────────────────
 KA.initInferencePage = function (pots) {
-  function refresh() {
+  var _infChartData = {}; // _infChartData[pot] = { rsmi: [], dates: [] }
+  var _lastInfTs = { A: null, B: null };
+
+  function renderInfChart(pot) {
+    var chartContainer = document.getElementById("chart-rsmi-" + pot);
+    if (!chartContainer || !_infChartData[pot] || !_infChartData[pot].rsmi.length) return;
+    var chart = KA.trendChart(_infChartData[pot].rsmi, _infChartData[pot].dates, POT_COLOUR[pot], "", false);
+    chartContainer.innerHTML = "";
+    chartContainer.appendChild(chart);
+  }
+
+  function updateFlagUI(pot, rows) {
+    if (!rows.length) return;
+    var latest = rows[rows.length - 1];
+
+    var flagEl = document.getElementById("flag-" + pot);
+    if (flagEl) {
+      flagEl.innerHTML = "";
+      flagEl.className = "ka-flag ka-flag-" + latest.flag;
+      var flagName = document.createElement("div");
+      flagName.className = "ka-flag-name";
+      flagName.textContent = latest.flag;
+      var flagMeta = document.createElement("div");
+      flagMeta.className = "ka-flag-meta";
+      flagMeta.textContent =
+        "confidence " + latest.confidence.toFixed(2) +
+        " · " + latest.contributing_trend +
+        " · " + latest.model_version;
+      flagEl.appendChild(flagName);
+      flagEl.appendChild(flagMeta);
+    }
+
+    var historyEl = document.getElementById("flag-history-" + pot);
+    if (historyEl) {
+      historyEl.innerHTML = "";
+      rows.slice(-10).reverse().forEach(function (r) {
+        var item = document.createElement("div");
+        item.className = "ka-flag-history-item ka-flag-" + r.flag;
+        var time = document.createElement("span");
+        time.className = "ka-flag-history-time";
+        time.textContent = KA.fmtShortDate(r.timestamp);
+        var name = document.createElement("span");
+        name.textContent = r.flag;
+        item.appendChild(time);
+        item.appendChild(name);
+        historyEl.appendChild(item);
+      });
+    }
+  }
+
+  // Initial load: full history
+  pots.forEach(function (pot) {
+    _infChartData[pot] = { rsmi: [], dates: [] };
+    fetchJson("/api/inference?pot=" + pot + "&n=0")
+      .then(function (rows) {
+        if (!rows.length) return;
+        _lastInfTs[pot] = rows[rows.length - 1].timestamp;
+        rows.forEach(function (r) {
+          _infChartData[pot].rsmi.push(r.rsmi);
+          _infChartData[pot].dates.push(r.timestamp);
+        });
+        renderInfChart(pot);
+        updateFlagUI(pot, rows);
+      })
+      .catch(function (e) { console.warn("inference initial fetch error:", e); });
+  });
+
+  // Live polling: append new points
+  function liveTick() {
     pots.forEach(function (pot) {
       fetchJson("/api/inference?pot=" + pot + "&n=" + KA.N_LIVE)
         .then(function (rows) {
           if (!rows.length) return;
-
-          var rsmiValues = rows.map(function (r) { return r.rsmi; });
-          var dates = rows.map(function (r) { return r.timestamp; });
-          var chartContainer = document.getElementById("chart-rsmi-" + pot);
-          if (chartContainer) {
-            var chart = KA.trendChart(rsmiValues, dates, POT_COLOUR[pot], "", false);
-            chartContainer.innerHTML = "";
-            chartContainer.appendChild(chart);
-          }
-
-          var latest = rows[rows.length - 1];
-
-          var flagEl = document.getElementById("flag-" + pot);
-          if (flagEl) {
-            flagEl.innerHTML = "";
-            flagEl.className = "ka-flag ka-flag-" + latest.flag;
-            var flagName = document.createElement("div");
-            flagName.className = "ka-flag-name";
-            flagName.textContent = latest.flag;
-            var flagMeta = document.createElement("div");
-            flagMeta.className = "ka-flag-meta";
-            flagMeta.textContent =
-              "confidence " + latest.confidence.toFixed(2) +
-              " · " + latest.contributing_trend +
-              " · " + latest.model_version;
-            flagEl.appendChild(flagName);
-            flagEl.appendChild(flagMeta);
-          }
-
-          var historyEl = document.getElementById("flag-history-" + pot);
-          if (historyEl) {
-            historyEl.innerHTML = "";
-            rows.slice(-10).reverse().forEach(function (r) {
-              var item = document.createElement("div");
-              item.className = "ka-flag-history-item ka-flag-" + r.flag;
-              var time = document.createElement("span");
-              time.className = "ka-flag-history-time";
-              time.textContent = KA.fmtShortDate(r.timestamp);
-              var name = document.createElement("span");
-              name.textContent = r.flag;
-              item.appendChild(time);
-              item.appendChild(name);
-              historyEl.appendChild(item);
+          var newRows = rows.filter(function (r) {
+            return !_lastInfTs[pot] || r.timestamp > _lastInfTs[pot];
+          });
+          if (newRows.length) {
+            _lastInfTs[pot] = newRows[newRows.length - 1].timestamp;
+            newRows.forEach(function (r) {
+              _infChartData[pot].rsmi.push(r.rsmi);
+              _infChartData[pot].dates.push(r.timestamp);
             });
+            renderInfChart(pot);
+            updateFlagUI(pot, rows);
           }
         })
-        .catch(function (e) { console.warn("inference fetch error:", e); });
+        .catch(function (e) { console.warn("inference live tick error:", e); });
     });
   }
 
-  refresh();
-  setInterval(refresh, KA.REFRESH_MS);
+  setInterval(liveTick, KA.REFRESH_MS);
 };
