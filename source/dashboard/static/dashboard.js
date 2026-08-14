@@ -1,15 +1,16 @@
-// dashboard.js — Karbon Assure dual-pot live dashboard (v3.1)
+// dashboard.js — Karbon Assure dual-pot live dashboard (v3.2)
 // Features:
-//   - Full history loaded on page load (n=0), live tail appended every second.
-//   - Time range filters: "Today", "This Week", "Overall".
-//   - Corrected pot labels (Pot A: 0x76/A1, Pot B: 0x77/A0).
-//   - Status bar with collecting-since date, counts, and NTP sync status.
-//   - Download CSV button.
+//   - Full history loaded on page load (n=0), live rolling tail appended every second.
+//   - Time range filters: "5 Mins", "15 Mins", "1 Hour", "Today", "This Week", "Overall".
+//   - Rolling window dynamically slides as new readings arrive without freezing.
+//   - Deduplicated timestamp appending to prevent chart distortion.
+//   - Status bar with session metadata and NTP sync indicator.
+//   - CSV downloads.
 window.KA = window.KA || {};
 
 KA.REFRESH_MS  = 1000;   // 1 Hz — matches sketch 1-second logging cadence
 KA.N_LIVE      = 60;     // points fetched on each live tick (tail only)
-KA.currentFilter = "overall"; // "today" | "week" | "overall"
+KA.currentFilter = "overall"; // "5m" | "15m" | "1h" | "today" | "week" | "overall"
 
 // Sensor definitions — shown as raw-value cards + trend charts
 // key must match the field names returned by /api/raw
@@ -56,7 +57,7 @@ function _filterDataset(values, dates, filter) {
     return { values: values, dates: dates };
   }
 
-  // Use the timestamp of the latest sample as reference point
+  // Anchor to the latest available reading timestamp
   var lastIso = dates[dates.length - 1];
   var refTime = new Date(lastIso).getTime();
   if (isNaN(refTime)) refTime = Date.now();
@@ -92,7 +93,6 @@ function _filterDataset(values, dates, filter) {
   }
   return { values: filtValues, dates: filtDates };
 }
-
 
 function _setupFilterListeners(groupId, onFilterChange) {
   var group = document.getElementById(groupId);
@@ -156,9 +156,13 @@ function _appendRows(pot, rows) {
   var sensors = Object.keys(SENSOR_META);
   sensors.forEach(function (sensor) {
     var buf = _ensureChartData(pot, sensor);
+    var lastRecordedTs = buf.dates.length ? buf.dates[buf.dates.length - 1] : null;
     rows.forEach(function (r) {
-      buf.dates.push(r.timestamp);
-      buf.values.push(r[sensor]);
+      if (!lastRecordedTs || r.timestamp > lastRecordedTs) {
+        buf.dates.push(r.timestamp);
+        buf.values.push(r[sensor]);
+        lastRecordedTs = r.timestamp;
+      }
     });
   });
 }
@@ -180,6 +184,7 @@ function _renderCharts(pot) {
 // ── Raw page ───────────────────────────────────────────────────────────────
 KA.initRawPage = function (pots) {
   var sensors = Object.keys(SENSOR_META);
+  var _lastTs = { A: null, B: null };
 
   // Set descriptive subtitles
   pots.forEach(function (pot) {
@@ -202,25 +207,25 @@ KA.initRawPage = function (pots) {
   pots.forEach(function (pot) {
     fetchJson("/api/raw?pot=" + pot + "&n=0")
       .then(function (rows) {
-        _appendRows(pot, rows);
-        sensors.forEach(function (sensor) {
-          updateRawCard(pot, sensor, SENSOR_META[sensor], rows);
-        });
-        _renderCharts(pot);
+        if (rows && rows.length) {
+          _lastTs[pot] = rows[rows.length - 1].timestamp;
+          _appendRows(pot, rows);
+          sensors.forEach(function (sensor) {
+            updateRawCard(pot, sensor, SENSOR_META[sensor], rows);
+          });
+          _renderCharts(pot);
+        }
       })
       .catch(function (e) { console.warn("initial history fetch error:", e); });
   });
-
-  // Track last seen timestamp per pot to only append genuinely new rows
-  var _lastTs = { A: null, B: null };
 
   function liveTick() {
     pots.forEach(function (pot) {
       fetchJson("/api/raw?pot=" + pot + "&n=" + KA.N_LIVE)
         .then(function (rows) {
-          if (!rows.length) return;
+          if (!rows || !rows.length) return;
 
-          // Filter only rows newer than the last seen timestamp
+          // Filter only rows strictly newer than the last seen timestamp
           var newRows = rows.filter(function (r) {
             return !_lastTs[pot] || r.timestamp > _lastTs[pot];
           });
@@ -228,10 +233,10 @@ KA.initRawPage = function (pots) {
           if (newRows.length) {
             _lastTs[pot] = newRows[newRows.length - 1].timestamp;
             _appendRows(pot, newRows);
-            // Update latest-value cards with most-recent row
             sensors.forEach(function (sensor) {
               updateRawCard(pot, sensor, SENSOR_META[sensor], rows);
             });
+            // Re-render chart so the rolling window advances smoothly
             _renderCharts(pot);
           }
         })
@@ -307,7 +312,7 @@ KA.initInferencePage = function (pots) {
     _infChartData[pot] = { rsmi: [], dates: [] };
     fetchJson("/api/inference?pot=" + pot + "&n=0")
       .then(function (rows) {
-        if (!rows.length) return;
+        if (!rows || !rows.length) return;
         _lastInfTs[pot] = rows[rows.length - 1].timestamp;
         rows.forEach(function (r) {
           _infChartData[pot].rsmi.push(r.rsmi);
@@ -319,20 +324,24 @@ KA.initInferencePage = function (pots) {
       .catch(function (e) { console.warn("inference initial fetch error:", e); });
   });
 
-  // Live polling: append new points
+  // Live polling: append new points and advance rolling window
   function liveTick() {
     pots.forEach(function (pot) {
       fetchJson("/api/inference?pot=" + pot + "&n=" + KA.N_LIVE)
         .then(function (rows) {
-          if (!rows.length) return;
+          if (!rows || !rows.length) return;
           var newRows = rows.filter(function (r) {
             return !_lastInfTs[pot] || r.timestamp > _lastInfTs[pot];
           });
           if (newRows.length) {
             _lastInfTs[pot] = newRows[newRows.length - 1].timestamp;
+            var lastRecordedTs = _infChartData[pot].dates.length ? _infChartData[pot].dates[_infChartData[pot].dates.length - 1] : null;
             newRows.forEach(function (r) {
-              _infChartData[pot].rsmi.push(r.rsmi);
-              _infChartData[pot].dates.push(r.timestamp);
+              if (!lastRecordedTs || r.timestamp > lastRecordedTs) {
+                _infChartData[pot].rsmi.push(r.rsmi);
+                _infChartData[pot].dates.push(r.timestamp);
+                lastRecordedTs = r.timestamp;
+              }
             });
             renderInfChart(pot);
             updateFlagUI(pot, rows);
