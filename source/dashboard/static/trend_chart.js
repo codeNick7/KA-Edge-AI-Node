@@ -74,7 +74,7 @@ KA.trendChart = function (values, dates, colour, unit, stressed) {
   var polyline = document.createElementNS(svgNs, "polyline");
   polyline.setAttribute("fill", "none");
   polyline.setAttribute("stroke", colour);
-  polyline.setAttribute("stroke-width", "2");
+  polyline.setAttribute("stroke-width", "1");
   polyline.setAttribute("stroke-linejoin", "round");
   polyline.setAttribute("stroke-linecap", "round");
   polyline.setAttribute("points", linePts);
@@ -84,18 +84,18 @@ KA.trendChart = function (values, dates, colour, unit, stressed) {
     var peakDot = document.createElementNS(svgNs, "circle");
     peakDot.setAttribute("cx", pts[peakIdx].x);
     peakDot.setAttribute("cy", pts[peakIdx].y);
-    peakDot.setAttribute("r", "3");
+    peakDot.setAttribute("r", "2");
     peakDot.setAttribute("fill", colour);
     peakDot.setAttribute("fill-opacity", "0.4");
     peakDot.setAttribute("stroke", colour);
-    peakDot.setAttribute("stroke-width", "1");
+    peakDot.setAttribute("stroke-width", "0.8");
     svg.appendChild(peakDot);
   }
 
   var lastDot = document.createElementNS(svgNs, "circle");
   lastDot.setAttribute("cx", pts[pts.length - 1].x);
   lastDot.setAttribute("cy", pts[pts.length - 1].y);
-  lastDot.setAttribute("r", "3.5");
+  lastDot.setAttribute("r", "2.5");
   lastDot.setAttribute("fill", colour);
   svg.appendChild(lastDot);
 
