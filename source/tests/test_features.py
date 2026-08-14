@@ -9,20 +9,20 @@ from edge_node.features import (
 
 
 def test_rsmi_below_wilting_point_clips_to_zero():
-    assert compute_rsmi(5.0, texture="loam") == 0.0  # loam WP=14.0
+    assert compute_rsmi(5.0, texture="loam") == 0.0  # loam WP=28.0
 
 
 def test_rsmi_above_field_capacity_clips_to_one():
-    assert compute_rsmi(99.0, texture="loam") == 1.0  # loam FC=29.0
+    assert compute_rsmi(99.0, texture="loam") == 1.0  # loam FC=58.0
 
 
 def test_rsmi_mid_range():
-    # loam WP=14.0, FC=29.0, span=15.0; moisture=21.5 -> midpoint
-    assert compute_rsmi(21.5, texture="loam") == pytest.approx(0.5)
+    # loam WP=28.0, FC=58.0, span=30.0; moisture=43.0 -> midpoint
+    assert compute_rsmi(43.0, texture="loam") == pytest.approx(0.5)
 
 
 def test_rsmi_defaults_to_loam_when_texture_unset():
-    assert compute_rsmi(21.5) == pytest.approx(0.5)
+    assert compute_rsmi(43.0) == pytest.approx(0.5)
 
 
 def test_rsmi_zero_span_raises(monkeypatch):

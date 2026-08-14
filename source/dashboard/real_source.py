@@ -42,10 +42,11 @@ DEFAULT_SESSION_LOG = os.path.join(_BOARD_DATA_DIR, "session_log.jsonl")
 PLACEHOLDER_LIGHT_LUX = 400.0
 
 # Soil texture assumed for RSMI conversion.
-# Interim: clay_loam (WP 17 / FC 35, PMC7085626 field-measured), not loam —
-# the pot mix (60% red soil / 20% clay / 20% manure) is closer to clay_loam
-# than to plain loam, and clay_loam is a real cited table entry rather than
-# loam's interpolated midpoint. Still provisional: replace with a jar-test +
+# Interim: clay_loam (WP 34 / FC 70 on the sensor's own 0-100 scale, see
+# texture_table.py's 2026-08-14 unit-fix note), not loam — the pot mix (60%
+# red soil / 20% clay / 20% manure) is closer to clay_loam than to plain
+# loam, and clay_loam is a real cited table entry rather than loam's
+# interpolated midpoint. Still provisional: replace with a jar-test +
 # Saxton-Rawls (2006) calculated value once the sedimentation test is done —
 # manure/organic matter will likely push field capacity higher still.
 TEXTURE = "clay_loam"
