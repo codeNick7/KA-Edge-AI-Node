@@ -160,6 +160,9 @@ def handle_reading(msg):
         print(f"[Reading] WARN: skipping malformed message {msg!r}: {e}")
         return
 
+    # IMPORTANT: this file must live inside the App Lab project directory.
+    # App Lab project: /home/arduino/ArduinoApps/ka-edge-node/
+    # Data files are written to: ka-edge-node/python/data/
     # Skip records where both BME sets are all zeros — indicates both sensors
     # offline (bme.performReading() failed for both pots this cycle).
     all_zero_a = rec_a["temp_c"] == 0.0 and rec_a["pressure_hpa"] == 0.0 and rec_a["gas_kohm"] == 0.0

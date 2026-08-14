@@ -31,7 +31,8 @@ from edge_node.validity import check_validity
 from .mock_source import MODEL_VERSION
 
 # Must match KA-Edge-source/python/main.py's DATA_DIR and filenames.
-_BOARD_DATA_DIR = "/home/arduino/ArduinoApps/test-sensors/python/data"
+# App Lab project: /home/arduino/ArduinoApps/ka-edge-node/
+_BOARD_DATA_DIR = "/home/arduino/ArduinoApps/ka-edge-node/python/data"
 
 DEFAULT_POT_A_PATH = os.path.join(_BOARD_DATA_DIR, "pot_a_readings.jsonl")
 DEFAULT_POT_B_PATH = os.path.join(_BOARD_DATA_DIR, "pot_b_readings.jsonl")
