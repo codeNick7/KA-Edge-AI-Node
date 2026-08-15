@@ -73,6 +73,17 @@ instruction to always use `.venv/bin/python`.
       deadline pressure
 - [ ] 12. Actually run `scripts/board_dry_run.sh` against the real board once it's reachable over
       SSH, to get real QRB2210 timing numbers (currently only simulated locally — see log below)
+- [ ] 13. For the real 16-17 Aug training step: add a time-of-day feature (e.g. `hour_of_day`, or
+      raw `light_lux` instead of/alongside `light_delta`) to `train.py`'s `FEATURE_NAMES` and
+      `generate_synthetic_rows`, so the trained tree can learn the day/night light pattern from
+      real data instead of `compute_light_delta`'s naive two-point delta hand-coding a sunrise/
+      sunset heuristic. Context: `compute_light_delta` (features.py) has no diurnal awareness — a
+      normal sunrise ramp reads identically to "light rising because soil is drying," which can
+      spuriously satisfy `drought_onset`'s light criterion regardless of actual soil moisture.
+      Decided against hand-building sunrise/sunset masking in the placeholder tree (2026-08-14
+      conversation) since real light data doesn't exist yet (BH1750 not wired until 15 Aug) and
+      the placeholder tree is superseded by this training step within ~2 days anyway — not worth
+      building/validating day-boundary math against no data just to throw it away.
 
 ## Progress log
 

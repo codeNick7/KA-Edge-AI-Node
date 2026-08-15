@@ -1,6 +1,6 @@
-// v7.0 — dual-pot: BME688@0x76 + A1 (Pot A), BME688@0x77 + A0 (Pot B)
+// v7.0 — dual-pot: BME688@0x76 + A0 (Pot A), BME688@0x77 + A1 (Pot B)
 // I²C bus: Wire1 (Qwiic connector) — confirmed by hardware diagnostic 2026-08-14.
-// Soil pins: Pot A → A1, Pot B → A0 (confirmed by hardware diagnostic).
+// Soil pins: Pot A → A0, Pot B → A1 (confirmed by physical watering test).
 // BH1750 light sensor: placeholder fields (0.00) until physically wired.
 //   TODO BH1750: when wired, add #include <hp_BH1750.h>, call begin() in doInit(),
 //   replace LIGHT_PLACEHOLDER with real lux readings. Supply I2C address per pot.
@@ -32,9 +32,9 @@ bool bmeBReady = false;
 bool cardReady = false;
 
 // ── Soil moisture — Cytron capacitive sensor (inverted: dry = high ADC) ──
-// Pot A → A1 | Pot B → A0  (confirmed by hardware diagnostic 2026-08-14)
-const int SOIL_PIN_A = A1;
-const int SOIL_PIN_B = A0;
+// Pot A → A0 | Pot B → A1  (confirmed by physical watering test 2026-08-14)
+const int SOIL_PIN_A = A0;
+const int SOIL_PIN_B = A1;
 
 // Calibration: dry air ≈ 1020 ADC (5 V), saturated ≈ 350 ADC (~1.71 V).
 // These values are typical for the Cytron CACTUS sensor on a 5 V supply.
@@ -67,6 +67,37 @@ void report(const char *msg) {
     snprintf(reportLines[reportCount], sizeof(reportLines[reportCount]), "%s", msg);
     reportCount++;
   }
+}
+
+// ── SD card free-space reporting ──────────────────────────────────────────
+// NOT sent through the reportLines[] queue above — that queue is a bounded
+// (MAX_REPORT_LINES=40) one-shot buffer for init diagnostics; once drained
+// it never accepts more, so a periodic reading would silently stop being
+// delivered after the first ~40 messages. This sends directly on the same
+// "sd_status" Bridge channel instead, on its own timer.
+//
+// freeClusterCount() walks the FAT, which can take a noticeable amount of
+// time on some cards/library versions — do NOT call this every 1 Hz loop
+// tick, or it risks stalling the sensor sampling cadence. 60s is a starting
+// guess; this has not been timed on the real board (no hardware access in
+// this session) — if it visibly hitches the 1 Hz log on real hardware,
+// raise SD_SPACE_REPORT_INTERVAL_MS further.
+const unsigned long SD_SPACE_REPORT_INTERVAL_MS = 60000;
+unsigned long lastSdSpaceReportMs = 0;
+
+void reportSdSpace() {
+  if (!cardReady) return;
+  uint32_t freeClusters  = sd.vol()->freeClusterCount();
+  uint32_t totalClusters = sd.vol()->clusterCount();
+  uint32_t bytesPerCluster = sd.vol()->bytesPerCluster();
+  double freeMB  = (double)freeClusters  * bytesPerCluster / (1024.0 * 1024.0);
+  double totalMB = (double)totalClusters * bytesPerCluster / (1024.0 * 1024.0);
+  double usedMB  = totalMB - freeMB;
+
+  char msg[96];
+  snprintf(msg, sizeof(msg), "SD_SPACE used=%.1fMB free=%.1fMB total=%.1fMB",
+           usedMB, freeMB, totalMB);
+  Bridge.notify("sd_status", msg);
 }
 
 // ── CSV row builder ───────────────────────────────────────────────────────
@@ -241,6 +272,14 @@ void doStreamOneReading() {
   char readingMsg[192];
   buildReadingLine(readingMsg, sizeof(readingMsg), sampleIndex, moistA, moistB);
   Bridge.notify("reading", readingMsg);
+
+  // SD free-space report — throttled to SD_SPACE_REPORT_INTERVAL_MS (see
+  // reportSdSpace() comment); not run every 1 Hz tick.
+  unsigned long nowMs = millis();
+  if (cardReady && (nowMs - lastSdSpaceReportMs >= SD_SPACE_REPORT_INTERVAL_MS)) {
+    reportSdSpace();
+    lastSdSpaceReportMs = nowMs;
+  }
 
   // Human-readable debug line on the write_log channel
   String dbg = "A[" + String(bmeA.temperature, 1) + "C " +

@@ -122,6 +122,31 @@ def test_api_inference_both_pots_return_rows(tmp_path, monkeypatch):
         assert rows[0]["model_version"] == MODEL_VERSION
 
 
+def test_api_status_reports_sd_card_space(tmp_path, monkeypatch):
+    pot_a = tmp_path / "pot_a.jsonl"
+    pot_b = tmp_path / "pot_b.jsonl"
+    open(pot_a, "w").close()
+    open(pot_b, "w").close()
+    sd_status = tmp_path / "sd_status.json"
+    sd_status.write_text(json.dumps({
+        "sd_used_mb": 12.4, "sd_free_mb": 1987.6, "sd_total_mb": 2000.0,
+        "updated_at": "2026-08-15T09:00:00+00:00",
+    }))
+    monkeypatch.setattr(
+        dashboard_app,
+        "_real_source",
+        RealDataSource(pot_a_path=str(pot_a), pot_b_path=str(pot_b), sd_status_path=str(sd_status)),
+    )
+
+    c = client()
+    resp = c.get("/api/status")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["sd_used_mb"] == 12.4
+    assert body["sd_free_mb"] == 1987.6
+    assert body["sd_total_mb"] == 2000.0
+
+
 def test_api_rejects_unknown_pot():
     c = client()
     for path in ("/api/raw?pot=Z", "/api/inference?pot=Z"):

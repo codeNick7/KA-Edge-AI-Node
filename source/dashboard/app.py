@@ -5,13 +5,14 @@ Two views:
   /inference — Inference charts, Pot A and Pot B separate
 
 Hardware confirmed 2026-08-14:
-  Pot A — BME688 @0x76 (Wire1/Qwiic), Cytron soil on A1
-  Pot B — BME688 @0x77 (Wire1/Qwiic), Cytron soil on A0
+  Pot A — BME688 @0x76 (Wire1/Qwiic), Cytron soil on A0
+  Pot B — BME688 @0x77 (Wire1/Qwiic), Cytron soil on A1
 
 API endpoints:
   /api/raw?pot=A&n=60     — last N readings (n=0 → full history)
   /api/inference?pot=A&n=60
-  /api/status             — session metadata (collecting since, NTP sync, counts)
+  /api/status             — session metadata (collecting since, NTP sync, counts,
+                             SD card used/free/total MB from the MCU's physical card)
   /api/download/csv?pot=A — download JSONL as CSV (pot=A, pot=B, or omit for both)
 
 Run from source/:  .venv/bin/python -m dashboard.app

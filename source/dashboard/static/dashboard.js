@@ -24,11 +24,11 @@ var SENSOR_META = {
   light_lux:    { label: "Light",         colour: "#EEE9E2", unit: " lx" },
 };
 
-// Hardware confirmed 2026-08-14: Pot A → A1, Pot B → A0
+// Hardware confirmed 2026-08-14: Pot A → A0, Pot B → A1
 var POT_COLOUR = { A: "#52B788", B: "#7BBFE0" };
 var POT_LABEL  = {
-  A: "Pot A — BME688 @0x76 · Soil A1",
-  B: "Pot B — BME688 @0x77 · Soil A0",
+  A: "Pot A — BME688 @0x76 · Soil A0",
+  B: "Pot B — BME688 @0x77 · Soil A1",
 };
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -50,6 +50,12 @@ function fmtTs(iso) {
     var d = new Date(iso);
     return d.toLocaleString();
   } catch (e) { return iso; }
+}
+
+function fmtMB(mb) {
+  if (mb === null || mb === undefined || isNaN(mb)) return "—";
+  var n = Number(mb);
+  return n >= 1024 ? (n / 1024).toFixed(2) + " GB" : n.toFixed(1) + " MB";
 }
 
 // ── Time range filtering ───────────────────────────────────────────────────
@@ -122,12 +128,21 @@ KA.refreshStatus = function () {
     var offset = (s.ntp_offset_s !== null && s.ntp_offset_s !== undefined)
       ? " (" + (s.ntp_offset_s >= 0 ? "+" : "") + s.ntp_offset_s.toFixed(3) + " s)"
       : "";
+    var sdSpan = "";
+    if (s.sd_used_mb !== null && s.sd_used_mb !== undefined &&
+        s.sd_total_mb !== null && s.sd_total_mb !== undefined) {
+      var pctUsed = s.sd_total_mb > 0 ? (s.sd_used_mb / s.sd_total_mb * 100) : 0;
+      sdSpan =
+        "<span>· 💾 SD: <strong>" + fmtMB(s.sd_used_mb) + " / " + fmtMB(s.sd_total_mb) +
+        "</strong> (" + pctUsed.toFixed(0) + "% used)</span>";
+    }
     el.innerHTML =
       "<span>📅 Collecting since: <strong>" + fmtTs(s.collecting_since) + "</strong></span>" +
       "<span>· A: <strong>" + s.total_readings_a + "</strong> readings</span>" +
       "<span>· B: <strong>" + s.total_readings_b + "</strong> readings</span>" +
       "<span>· " + ntp + offset + "</span>" +
-      "<span>· Last: " + fmtTs(s.last_reading_at) + "</span>";
+      "<span>· Last: " + fmtTs(s.last_reading_at) + "</span>" +
+      sdSpan;
   }).catch(function () {});
 };
 

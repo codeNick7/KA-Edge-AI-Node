@@ -20,12 +20,12 @@
 #   9  gasB_KOhm
 #  10  lightA_lux      (placeholder 0.00 until BH1750 is wired)
 #  11  lightB_lux      (placeholder 0.00 until BH1750 is wired)
-#  12  moistureA_pct   (Pot A → A1)
-#  13  moistureB_pct   (Pot B → A0)
+#  12  moistureA_pct   (Pot A → A0)
+#  13  moistureB_pct   (Pot B → A1)
 #
 # Hardware confirmed 2026-08-14:
-#   Pot A: BME688 @0x76, soil A1, Wire1 (Qwiic)
-#   Pot B: BME688 @0x77, soil A0, Wire1 (Qwiic)
+#   Pot A: BME688 @0x76, soil A0, Wire1 (Qwiic)
+#   Pot B: BME688 @0x77, soil A1, Wire1 (Qwiic)
 import json
 import os
 import socket
@@ -41,6 +41,10 @@ DATA_DIR        = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data
 POT_A_PATH      = os.path.join(DATA_DIR, "pot_a_readings.jsonl")
 POT_B_PATH      = os.path.join(DATA_DIR, "pot_b_readings.jsonl")
 SESSION_LOG     = os.path.join(DATA_DIR, "session_log.jsonl")
+# Latest-value only (overwritten each update, not appended) — unlike the
+# readings files this has no history value, and appending would just be
+# another ever-growing file for no benefit.
+SD_STATUS_PATH  = os.path.join(DATA_DIR, "sd_status.json")
 
 os.makedirs(DATA_DIR, exist_ok=True)
 
@@ -108,7 +112,28 @@ _write_session_start(_ntp_info)
 
 # ── Bridge handlers ────────────────────────────────────────────────────────────
 def handle_status(msg):
+    """Reports on the sd_status channel: init diagnostics (printed only) and
+    the periodic "SD_SPACE used=X.XMB free=X.XMB total=X.XMB" line from
+    sketch.ino's reportSdSpace(), which is persisted for the dashboard.
+    """
     print(f"[SD Bus Status]: {msg}")
+    if not msg.startswith("SD_SPACE"):
+        return
+    try:
+        values = {}
+        for token in msg.split()[1:]:
+            key, raw_val = token.split("=", 1)
+            values[key] = float(raw_val.rstrip("MB"))
+        entry = {
+            "sd_used_mb": values["used"],
+            "sd_free_mb": values["free"],
+            "sd_total_mb": values["total"],
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        with open(SD_STATUS_PATH, "w") as f:
+            json.dump(entry, f)
+    except (ValueError, IndexError, KeyError) as e:
+        print(f"[SD Status] WARN: could not parse {msg!r}: {e}")
 
 
 def handle_log(msg):
@@ -130,7 +155,7 @@ def handle_reading(msg):
         sample_index = int(parts[0])
         millis_ms = int(parts[1])
 
-        # Pot A record (BME688 @0x76, soil A1)
+        # Pot A record (BME688 @0x76, soil A0)
         rec_a = {
             "sample_index": sample_index,
             "millis_ms": millis_ms,
@@ -143,7 +168,7 @@ def handle_reading(msg):
             "received_at": received_at,
         }
 
-        # Pot B record (BME688 @0x77, soil A0)
+        # Pot B record (BME688 @0x77, soil A1)
         rec_b = {
             "sample_index": sample_index,
             "millis_ms": millis_ms,
@@ -195,5 +220,5 @@ bridge.provide("write_log", handle_log)
 bridge.provide("reading", handle_reading)
 
 if __name__ == "__main__":
-    print("[Python v3.0] Dual-pot sensor relay started — Pot A (0x76/A1) and Pot B (0x77/A0)…")
+    print("[Python v3.0] Dual-pot sensor relay started — Pot A (0x76/A0) and Pot B (0x77/A1)…")
     App.run()
