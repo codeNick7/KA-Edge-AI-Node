@@ -79,7 +79,13 @@ def classify(
         confidence = _threshold_confidence(
             rsmi - THRESHOLDS["rsmi_high"], 1.0 - THRESHOLDS["rsmi_high"]
         )
-        return Flag("waterlogged_risk", confidence, "moisture_up")
+        if rsmi_trend > 0:
+            trend = "moisture_up"
+        elif rsmi_trend < 0:
+            trend = "moisture_down"
+        else:
+            trend = "moisture_flat"
+        return Flag("waterlogged_risk", confidence, trend)
 
     if gas_index_trend < 0 and rsmi_trend < 0:
         confidence = _threshold_confidence(
