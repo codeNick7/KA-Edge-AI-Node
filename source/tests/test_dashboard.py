@@ -8,8 +8,9 @@ import json
 
 import dashboard.app as dashboard_app
 from dashboard.app import app
-from dashboard.mock_source import MODEL_VERSION, MockDataSource
+from dashboard.mock_source import MockDataSource
 from dashboard.real_source import PLACEHOLDER_LIGHT_LUX, RealDataSource
+from edge_node.trained_model import MODEL_VERSION
 
 
 def client():

@@ -1,0 +1,16 @@
+[
+  {
+    "pot": "A",
+    "start": "2026-08-01T00:00:00+00:00",
+    "end": null,
+    "label": "stable",
+    "note": "Control pot, watered normally twice daily (morning + evening) throughout the trial -- never showed drought or waterlogging symptoms. Overrides the RSMI threshold's clay_loam field-capacity miscalibration, which seed-labels ~98% of this pot's readings waterlogged_risk despite it being healthy."
+  },
+  {
+    "pot": "B",
+    "start": "2026-08-01T00:00:00+00:00",
+    "end": null,
+    "label": "moisture_low",
+    "note": "Watering stopped 2026-08-10 09:00 IST; visible wilting (plants bending/spreading) observed 2026-08-14 ~10:00 IST. Both events predate the earliest sensor sample (2026-08-14 09:40:47 UTC / 15:10 IST), so no pre-wilting Pot B baseline exists in this export -- entire file treated as post-onset."
+  }
+]

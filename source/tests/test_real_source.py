@@ -6,9 +6,11 @@ and serves both pots from real data.
 """
 
 import json
+import threading
+import time
 
-from dashboard.mock_source import MODEL_VERSION
 from dashboard.real_source import PLACEHOLDER_LIGHT_LUX, RealDataSource
+from edge_node.trained_model import MODEL_VERSION
 
 
 def _write_fixture(path, n=12, pot_id="A"):
@@ -138,6 +140,49 @@ def test_get_inference_dry_reading_not_waterlogged(tmp_path):
             assert row["flag"] != "waterlogged_risk", (
                 f"Pot {pot} dry reading wrongly classified as waterlogged_risk: {row}"
             )
+
+
+# ── Concurrent cold-start access ────────────────────────────────────────────
+
+def test_concurrent_cold_start_does_not_duplicate_history(tmp_path, monkeypatch):
+    """Diagnosed 2026-08-15 against real board data: the dashboard fires
+    several concurrent requests touching the same pot on page load
+    (/api/status, /api/raw, /api/inference — each an un-awaited fetch()).
+    Without a lock, concurrent callers hitting a cold (empty) cache could
+    each independently read the whole file from byte 0 and each append
+    their own copy, producing an exact N-times duplication of the entire
+    history in memory (confirmed: every row before the board process's
+    cold-start race window resolved was tripled; every row after was
+    clean). This exercises that exact pattern under real thread
+    contention — widening the race window with an injected delay, since
+    local disk I/O is normally too fast to reliably interleave in a test."""
+    pot_a = tmp_path / "pot_a.jsonl"
+    pot_b = tmp_path / "pot_b.jsonl"
+    _write_fixture(pot_a, n=200, pot_id="A")
+    open(pot_b, "w").close()
+    source = RealDataSource(pot_a_path=str(pot_a), pot_b_path=str(pot_b))
+
+    orig = source._load_records_locked
+
+    def slow_load_records_locked(pot, path, cache):
+        time.sleep(0.02)  # widen the race window, like real disk I/O latency
+        return orig(pot, path, cache)
+
+    monkeypatch.setattr(source, "_load_records_locked", slow_load_records_locked)
+
+    results = []
+
+    def worker():
+        results.append(len(source.get_raw("A", 0)))
+
+    threads = [threading.Thread(target=worker) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert results == [200] * 8, f"a concurrent caller saw a duplicated/partial view: {results}"
+    assert len(source.get_raw("A", 0)) == 200
 
 
 # ── Status / SD card space ─────────────────────────────────────────────────

@@ -1,8 +1,11 @@
 """Real data source for both Pot A and Pot B.
 
-Hardware confirmed 2026-08-14:
-  Pot A — BME688 @0x76 (Wire1/Qwiic), Cytron soil sensor on A0
-  Pot B — BME688 @0x77 (Wire1/Qwiic), Cytron soil sensor on A1
+Soil pin mapping corrected 2026-08-15 (the 2026-08-14 "confirmed" mapping
+below was backwards from the very start of data collection — see
+sketch.ino's header and scripts/migrate_soil_pin_swap.py for the
+historical-data fix this forced):
+  Pot A — BME688 @0x76 (Wire1/Qwiic), Cytron soil sensor on A1
+  Pot B — BME688 @0x77 (Wire1/Qwiic), Cytron soil sensor on A0
 
 Readings arrive from sketch v7.0 over Bridge, are parsed by
 KA-Edge-source/python/main.py (v3.0), and appended to two JSONL files:
@@ -19,16 +22,26 @@ Notes:
 - moisture_pct is a real Cytron ADC reading for both pots.
 - Data is persistent: files are appended on restart so the full trend
   from the first-ever reading is always available.
+
+Model (2026-08-16): inference now runs edge_node.trained_model.trained_predict(),
+a decision tree fit on the real Pot A/B trial (scripts/build_training_set.py +
+edge_node/train.py --data, PRD Section 5 steps 3-4) -- not the literature-seeded
+placeholder (edge_node.decision_tree.classify(), still used by mock_source.py's
+synthetic demo data and by train.py's synthetic timing dry-run). The validity
+gate (edge_node.validity.check_validity) still runs first and independently --
+"sensor_fault" is a data-quality signal the trained model was never asked to
+learn (its training set only ever contains "stable"/"moisture_low" labels, so
+the flags "drought_onset"/"waterlogged_risk"/"soil_health_degrading" the old
+placeholder tree could emit are no longer reachable here at all).
 """
 
 import json
 import os
+import threading
 
-from edge_node.decision_tree import classify
 from edge_node.features import compute_light_delta, compute_rsmi, compute_trend_slope
+from edge_node.trained_model import MODEL_VERSION, trained_predict
 from edge_node.validity import check_validity
-
-from .mock_source import MODEL_VERSION
 
 # Must match KA-Edge-source/python/main.py's DATA_DIR and filenames.
 # App Lab project: /home/arduino/ArduinoApps/ka-edge-node/
@@ -84,11 +97,27 @@ class RealDataSource:
         # runs the RSMI/trend/classify pipeline on newly-arrived rows instead
         # of the entire history every time.
         self._inference_cache = {pot: {"raw_len": 0, "results": []} for pot in self._paths}
+        # Per-pot RLock guarding both caches above. Diagnosed 2026-08-15: the
+        # dashboard fires several concurrent requests that all touch the same
+        # pot on page load (/api/status, /api/raw, /api/inference, each an
+        # un-awaited fetch()); without a lock, two concurrent calls hitting
+        # an empty/cold cache could both read the entire file from byte 0 and
+        # both append their copy, producing exact N-times duplication of the
+        # whole history in memory (confirmed against real board data: every
+        # row before the process's cold-start race window resolved was
+        # tripled, every row after was clean). RLock (not Lock) because
+        # get_raw/get_inference hold the lock while internally calling
+        # _load_records, which re-acquires it on the same thread.
+        self._locks = {pot: threading.RLock() for pot in self._paths}
 
     def _load_records(self, pot: str) -> list[dict]:
         path = self._paths[pot]
         cache = self._record_cache[pot]
 
+        with self._locks[pot]:
+            return self._load_records_locked(pot, path, cache)
+
+    def _load_records_locked(self, pot: str, path: str, cache: dict) -> list[dict]:
         if not os.path.exists(path):
             cache["mtime"] = None
             cache["size"] = 0
@@ -169,14 +198,19 @@ class RealDataSource:
         """Return the last n raw rows for pot. n=0 returns the full history."""
         if pot not in self._paths:
             raise ValueError(f"RealDataSource: unknown pot {pot!r}")
-        records = self._load_records(pot)
-        if n and n > 0:
-            records = records[-n:]
-        return [self._to_raw_row(r) for r in records]
+        with self._locks[pot]:
+            records = self._load_records(pot)
+            if n and n > 0:
+                records = records[-n:]
+            return [self._to_raw_row(r) for r in records]
 
     def get_inference(self, pot: str, n: int) -> list[dict]:
         if pot not in self._paths:
             raise ValueError(f"RealDataSource: unknown pot {pot!r}")
+        with self._locks[pot]:
+            return self._get_inference_locked(pot, n)
+
+    def _get_inference_locked(self, pot: str, n: int) -> list[dict]:
         raw = [self._to_raw_row(r) for r in self._load_records(pot)]
 
         cache = self._inference_cache[pot]
@@ -204,7 +238,27 @@ class RealDataSource:
             gas_index_trend = compute_trend_slope(gas_history)
             rsmi_trend = compute_trend_slope(rsmi_history)
 
-            flag = classify(validity, rsmi, light_delta, gas_index_trend, rsmi_trend)
+            # Validity gate runs before the trained model, same as the old
+            # placeholder tree — sensor_fault is a data-quality signal, not
+            # something the model was ever trained to recognize (the real
+            # trial's training_set.jsonl only ever contains "stable" and
+            # "moisture_low", see scripts/build_training_set.py).
+            if validity.is_valid:
+                flag_label, flag_confidence = trained_predict(rsmi, light_delta, gas_index_trend, rsmi_trend)
+            else:
+                flag_label, flag_confidence = "sensor_fault", validity.validity_score
+
+            # trained_predict() only returns (label, confidence) -- the fitted
+            # tree has no notion of "contributing_trend" the way the old
+            # rule-based leaves did, so this is derived directly from
+            # rsmi_trend's sign for display purposes only.
+            if rsmi_trend > 1e-4:
+                contributing_trend = "moisture_up"
+            elif rsmi_trend < -1e-4:
+                contributing_trend = "moisture_down"
+            else:
+                contributing_trend = "moisture_flat"
+
             results.append(
                 {
                     "timestamp": row["timestamp"],
@@ -212,9 +266,9 @@ class RealDataSource:
                     "light_delta": round(light_delta, 2),
                     "gas_index_trend": round(gas_index_trend, 4),
                     "rsmi_trend": round(rsmi_trend, 4),
-                    "flag": flag.flag,
-                    "confidence": round(flag.confidence, 3),
-                    "contributing_trend": flag.contributing_trend,
+                    "flag": flag_label,
+                    "confidence": round(flag_confidence, 3),
+                    "contributing_trend": contributing_trend,
                     "model_version": MODEL_VERSION,
                 }
             )
