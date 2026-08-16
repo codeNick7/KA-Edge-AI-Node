@@ -20,12 +20,16 @@
 #   9  gasB_KOhm
 #  10  lightA_lux      (placeholder 0.00 until BH1750 is wired)
 #  11  lightB_lux      (placeholder 0.00 until BH1750 is wired)
-#  12  moistureA_pct   (Pot A → A0)
-#  13  moistureB_pct   (Pot B → A1)
+#  12  moistureA_pct   (Pot A → A1 as of sketch.ino v7.1 / 2026-08-15 fix —
+#                        NOT yet deployed as of this comment; readings until
+#                        the firmware is redeployed still carry the old,
+#                        backwards A0 mapping. See scripts/migrate_soil_pin_swap.py)
+#  13  moistureB_pct   (Pot B → A0, same caveat as above)
 #
-# Hardware confirmed 2026-08-14:
-#   Pot A: BME688 @0x76, soil A0, Wire1 (Qwiic)
-#   Pot B: BME688 @0x77, soil A1, Wire1 (Qwiic)
+# Soil pin mapping corrected 2026-08-15 (undeployed — pins/wiring
+# intentionally left as-is for now, only historical data was migrated):
+#   Pot A: BME688 @0x76, soil A1, Wire1 (Qwiic)
+#   Pot B: BME688 @0x77, soil A0, Wire1 (Qwiic)
 import json
 import os
 import socket
@@ -155,7 +159,7 @@ def handle_reading(msg):
         sample_index = int(parts[0])
         millis_ms = int(parts[1])
 
-        # Pot A record (BME688 @0x76, soil A0)
+        # Pot A record (BME688 @0x76, soil A1 — see 2026-08-15 pin-mapping note above)
         rec_a = {
             "sample_index": sample_index,
             "millis_ms": millis_ms,
@@ -168,7 +172,7 @@ def handle_reading(msg):
             "received_at": received_at,
         }
 
-        # Pot B record (BME688 @0x77, soil A1)
+        # Pot B record (BME688 @0x77, soil A0 — see 2026-08-15 pin-mapping note above)
         rec_b = {
             "sample_index": sample_index,
             "millis_ms": millis_ms,
@@ -220,5 +224,5 @@ bridge.provide("write_log", handle_log)
 bridge.provide("reading", handle_reading)
 
 if __name__ == "__main__":
-    print("[Python v3.0] Dual-pot sensor relay started — Pot A (0x76/A0) and Pot B (0x77/A1)…")
+    print("[Python v3.0] Dual-pot sensor relay started — Pot A (0x76/A1) and Pot B (0x77/A0)…")
     App.run()

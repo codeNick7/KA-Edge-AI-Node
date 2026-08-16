@@ -1,6 +1,10 @@
-// v7.0 — dual-pot: BME688@0x76 + A0 (Pot A), BME688@0x77 + A1 (Pot B)
+// v7.1 — dual-pot: BME688@0x76 + A1 (Pot A), BME688@0x77 + A0 (Pot B)
 // I²C bus: Wire1 (Qwiic connector) — confirmed by hardware diagnostic 2026-08-14.
-// Soil pins: Pot A → A0, Pot B → A1 (confirmed by physical watering test).
+// Soil pins CORRECTED 2026-08-15: the 2026-08-14 "confirmed by physical
+// watering test" mapping (Pot A -> A0, Pot B -> A1) was backwards — traced
+// again and found Pot A's probe is actually on A1, Pot B's (withering) is
+// actually on A0. Was wrong from the very start of data collection; see
+// scripts/migrate_soil_pin_swap.py for the historical-data fix this forced.
 // BH1750 light sensor: placeholder fields (0.00) until physically wired.
 //   TODO BH1750: when wired, add #include <hp_BH1750.h>, call begin() in doInit(),
 //   replace LIGHT_PLACEHOLDER with real lux readings. Supply I2C address per pot.
@@ -32,9 +36,10 @@ bool bmeBReady = false;
 bool cardReady = false;
 
 // ── Soil moisture — Cytron capacitive sensor (inverted: dry = high ADC) ──
-// Pot A → A0 | Pot B → A1  (confirmed by physical watering test 2026-08-14)
-const int SOIL_PIN_A = A0;
-const int SOIL_PIN_B = A1;
+// Pot A → A1 | Pot B → A0  (corrected 2026-08-15 — see file header note;
+// the 2026-08-14 A0/A1 mapping was backwards)
+const int SOIL_PIN_A = A1;
+const int SOIL_PIN_B = A0;
 
 // Calibration: dry air ≈ 1020 ADC (5 V), saturated ≈ 350 ADC (~1.71 V).
 // These values are typical for the Cytron CACTUS sensor on a 5 V supply.
@@ -215,12 +220,12 @@ void doInit() {
   // Soil sensors — initial ADC diagnostic readings
   int rawA = analogRead(SOIL_PIN_A);
   float pctA = soilPct(SOIL_PIN_A);
-  snprintf(msg, sizeof(msg), "soilA (A0) init: %.1f%% (raw %d)", pctA, rawA);
+  snprintf(msg, sizeof(msg), "soilA (A1) init: %.1f%% (raw %d)", pctA, rawA);
   report(msg);
 
   int rawB = analogRead(SOIL_PIN_B);
   float pctB = soilPct(SOIL_PIN_B);
-  snprintf(msg, sizeof(msg), "soilB (A1) init: %.1f%% (raw %d)", pctB, rawB);
+  snprintf(msg, sizeof(msg), "soilB (A0) init: %.1f%% (raw %d)", pctB, rawB);
   report(msg);
 
   // Write CSV header — fresh log each run
@@ -273,13 +278,21 @@ void doStreamOneReading() {
   buildReadingLine(readingMsg, sizeof(readingMsg), sampleIndex, moistA, moistB);
   Bridge.notify("reading", readingMsg);
 
-  // SD free-space report — throttled to SD_SPACE_REPORT_INTERVAL_MS (see
-  // reportSdSpace() comment); not run every 1 Hz tick.
-  unsigned long nowMs = millis();
-  if (cardReady && (nowMs - lastSdSpaceReportMs >= SD_SPACE_REPORT_INTERVAL_MS)) {
-    reportSdSpace();
-    lastSdSpaceReportMs = nowMs;
-  }
+  // SD free-space report — DISABLED 2026-08-15. Confirmed on real hardware:
+  // sd.vol()->freeClusterCount() (inside reportSdSpace()) took long enough
+  // to collapse the 1 Hz sampling loop to ~once/minute once it started
+  // firing, right around the first SD_SPACE_REPORT_INTERVAL_MS=60000
+  // threshold — exactly the risk flagged in reportSdSpace()'s comment when
+  // this was added, now confirmed rather than just suspected. Sampling
+  // integrity matters more than a live SD-space number this close to the
+  // 16-17 Aug trial data collection window. Re-enable only after timing
+  // freeClusterCount() in isolation and either finding it's fast enough or
+  // moving it off the 1 Hz hot path entirely.
+  // unsigned long nowMs = millis();
+  // if (cardReady && (nowMs - lastSdSpaceReportMs >= SD_SPACE_REPORT_INTERVAL_MS)) {
+  //   reportSdSpace();
+  //   lastSdSpaceReportMs = nowMs;
+  // }
 
   // Human-readable debug line on the write_log channel
   String dbg = "A[" + String(bmeA.temperature, 1) + "C " +

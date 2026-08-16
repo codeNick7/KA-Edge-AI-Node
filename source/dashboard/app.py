@@ -4,9 +4,9 @@ Two views:
   /raw       — Raw sensor stream, Pot A and Pot B in two vertical columns
   /inference — Inference charts, Pot A and Pot B separate
 
-Hardware confirmed 2026-08-14:
-  Pot A — BME688 @0x76 (Wire1/Qwiic), Cytron soil on A0
-  Pot B — BME688 @0x77 (Wire1/Qwiic), Cytron soil on A1
+Soil pin mapping corrected 2026-08-15 (see real_source.py header):
+  Pot A — BME688 @0x76 (Wire1/Qwiic), Cytron soil on A1
+  Pot B — BME688 @0x77 (Wire1/Qwiic), Cytron soil on A0
 
 API endpoints:
   /api/raw?pot=A&n=60     — last N readings (n=0 → full history)
