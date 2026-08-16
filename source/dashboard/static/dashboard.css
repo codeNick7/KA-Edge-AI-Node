@@ -152,6 +152,18 @@ body {
   align-items: center;
   gap: 0.5rem;
 }
+.ka-card-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.ka-card-titlebar h3 { margin-bottom: 0; }
+.ka-card-trend {
+  font-size: 0.7rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
 
 .ka-placeholder-badge {
   font-size: 0.62rem;
@@ -182,13 +194,6 @@ body {
 .ka-trend-stressed {
   border-color: rgba(230, 130, 30, 0.4);
   background: rgba(230, 130, 30, 0.08);
-}
-.ka-trend-delta {
-  position: absolute;
-  right: 0.4rem;
-  top: 0.3rem;
-  font-size: 0.7rem;
-  font-weight: 600;
 }
 .ka-trend-up   { color: var(--accent); }
 .ka-trend-down { color: #f5a35c; }

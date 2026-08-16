@@ -8,6 +8,18 @@
  */
 window.KA = window.KA || {};
 
+// Shared by callers that render the delta indicator outside the chart
+// itself (e.g. in a card title bar) instead of overlapping the SVG.
+KA.trendDelta = function (values, unit) {
+  unit = unit || "";
+  var nums = (values || []).filter(function (v) { return v !== null && v !== undefined && !isNaN(v); });
+  if (nums.length < 2) return { text: "", cls: "" };
+  var delta = nums[nums.length - 1] - nums[0];
+  if (delta < -0.001) return { text: "↓ " + Math.abs(delta).toFixed(3) + unit, cls: "ka-trend-down" };
+  if (delta > 0.001) return { text: "↑ " + Math.abs(delta).toFixed(3) + unit, cls: "ka-trend-up" };
+  return { text: "stable", cls: "ka-trend-stable" };
+};
+
 KA.trendChart = function (values, dates, colour, unit, stressed) {
   unit = unit || "";
   var nums = values.filter(function (v) { return v !== null && v !== undefined && !isNaN(v); });
@@ -30,9 +42,6 @@ KA.trendChart = function (values, dates, colour, unit, stressed) {
 
   var peakIdx = nums.indexOf(maxVal);
   var hasMidPeak = peakIdx > 0 && peakIdx < nums.length - 1;
-  var delta = nums[nums.length - 1] - nums[0];
-  var trendUp = delta > 0.001;
-  var trendDown = delta < -0.001;
 
   var validDates = (dates || []).filter(function (d) { return d != null; });
   var firstDate = validDates[0];
@@ -42,22 +51,6 @@ KA.trendChart = function (values, dates, colour, unit, stressed) {
 
   var box = document.createElement("div");
   box.className = "ka-trend-box" + (stressed ? " ka-trend-stressed" : "");
-
-  var deltaEl = document.createElement("div");
-  deltaEl.className = "ka-trend-delta";
-  var deltaSpan = document.createElement("span");
-  if (trendDown) {
-    deltaSpan.className = "ka-trend-down";
-    deltaSpan.textContent = "↓ " + Math.abs(delta).toFixed(3) + unit;
-  } else if (trendUp) {
-    deltaSpan.className = "ka-trend-up";
-    deltaSpan.textContent = "↑ " + Math.abs(delta).toFixed(3) + unit;
-  } else {
-    deltaSpan.className = "ka-trend-stable";
-    deltaSpan.textContent = "stable";
-  }
-  deltaEl.appendChild(deltaSpan);
-  box.appendChild(deltaEl);
 
   var svgNs = "http://www.w3.org/2000/svg";
   var svg = document.createElementNS(svgNs, "svg");

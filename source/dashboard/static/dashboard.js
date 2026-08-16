@@ -24,11 +24,13 @@ var SENSOR_META = {
   light_lux:    { label: "Light",         colour: "#EEE9E2", unit: " lx" },
 };
 
-// Hardware confirmed 2026-08-14: Pot A → A0, Pot B → A1
+// Soil pin mapping corrected 2026-08-15: Pot A → A1, Pot B → A0 (the
+// 2026-08-14 "confirmed" A0/A1 mapping was backwards from day one — see
+// sketch.ino header and scripts/migrate_soil_pin_swap.py).
 var POT_COLOUR = { A: "#52B788", B: "#7BBFE0" };
 var POT_LABEL  = {
-  A: "Pot A — BME688 @0x76 · Soil A0",
-  B: "Pot B — BME688 @0x77 · Soil A1",
+  A: "Pot A — BME688 @0x76 · Soil A1",
+  B: "Pot B — BME688 @0x77 · Soil A0",
 };
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -159,12 +161,30 @@ function updateRawCard(pot, sensor, meta, rows) {
 }
 
 // ── chart state — per-pot, per-sensor history buffer ──────────────────────
-var _chartData = {};   // _chartData[pot][sensor] = {values, dates}
+// Keyed by timestamp (not append order): the initial full-history fetch
+// (n=0, can take longer than REFRESH_MS against a large JSONL file) and the
+// 5s live-tick fetch (last 60 rows) race each other, so whichever resolves
+// first cannot be assumed to hold the earlier data. Merging by timestamp
+// key makes the buffer correct regardless of arrival order.
+var _chartData = {};   // _chartData[pot][sensor] = { byTs: {timestamp: value} }
 
 function _ensureChartData(pot, sensor) {
   if (!_chartData[pot]) _chartData[pot] = {};
-  if (!_chartData[pot][sensor]) _chartData[pot][sensor] = { values: [], dates: [] };
+  if (!_chartData[pot][sensor]) _chartData[pot][sensor] = { byTs: {} };
   return _chartData[pot][sensor];
+}
+
+function _mergeByTimestamp(byTs, rows, valueKey) {
+  rows.forEach(function (r) {
+    if (r.timestamp == null) return;
+    byTs[r.timestamp] = r[valueKey];
+  });
+}
+
+function _sortedSeries(byTs) {
+  var dates = Object.keys(byTs).sort();
+  var values = dates.map(function (t) { return byTs[t]; });
+  return { values: values, dates: dates };
 }
 
 function _appendRows(pot, rows) {
@@ -172,15 +192,18 @@ function _appendRows(pot, rows) {
   var sensors = Object.keys(SENSOR_META);
   sensors.forEach(function (sensor) {
     var buf = _ensureChartData(pot, sensor);
-    var lastRecordedTs = buf.dates.length ? buf.dates[buf.dates.length - 1] : null;
-    rows.forEach(function (r) {
-      if (!lastRecordedTs || r.timestamp > lastRecordedTs) {
-        buf.dates.push(r.timestamp);
-        buf.values.push(r[sensor]);
-        lastRecordedTs = r.timestamp;
-      }
-    });
+    _mergeByTimestamp(buf.byTs, rows, sensor);
   });
+}
+
+// Updates the right-aligned delta badge in a card's title bar, kept
+// separate from the chart itself so it doesn't overlap the SVG.
+function _updateTrendBadge(id, values, unit) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  var d = KA.trendDelta(values, unit);
+  el.textContent = d.text;
+  el.className = "ka-card-trend" + (d.cls ? " " + d.cls : "");
 }
 
 function _renderCharts(pot) {
@@ -189,18 +212,19 @@ function _renderCharts(pot) {
     var container = document.getElementById("chart-" + sensor + "-" + pot);
     if (!container) return;
     var buf = _ensureChartData(pot, sensor);
-    if (!buf.values.length) return;
-    var filt = _filterDataset(buf.values, buf.dates, KA.currentFilter);
+    var series = _sortedSeries(buf.byTs);
+    if (!series.values.length) return;
+    var filt = _filterDataset(series.values, series.dates, KA.currentFilter);
     var chart = KA.trendChart(filt.values, filt.dates, POT_COLOUR[pot], SENSOR_META[sensor].unit, false);
     container.innerHTML = "";
     container.appendChild(chart);
+    _updateTrendBadge("trend-" + sensor + "-" + pot, filt.values, SENSOR_META[sensor].unit);
   });
 }
 
 // ── Raw page ───────────────────────────────────────────────────────────────
 KA.initRawPage = function (pots) {
   var sensors = Object.keys(SENSOR_META);
-  var _lastTs = { A: null, B: null };
 
   // Set descriptive subtitles
   pots.forEach(function (pot) {
@@ -224,7 +248,6 @@ KA.initRawPage = function (pots) {
     fetchJson("/api/raw?pot=" + pot + "&n=0")
       .then(function (rows) {
         if (rows && rows.length) {
-          _lastTs[pot] = rows[rows.length - 1].timestamp;
           _appendRows(pot, rows);
           sensors.forEach(function (sensor) {
             updateRawCard(pot, sensor, SENSOR_META[sensor], rows);
@@ -247,15 +270,7 @@ KA.initRawPage = function (pots) {
             updateRawCard(pot, sensor, SENSOR_META[sensor], rows);
           });
 
-          // Filter only rows strictly newer than the last seen timestamp
-          var newRows = rows.filter(function (r) {
-            return !_lastTs[pot] || r.timestamp > _lastTs[pot];
-          });
-
-          if (newRows.length) {
-            _lastTs[pot] = newRows[newRows.length - 1].timestamp;
-            _appendRows(pot, newRows);
-          }
+          _appendRows(pot, rows);
 
           // Re-render chart so the rolling window and axis timestamps advance smoothly
           _renderCharts(pot);
@@ -269,16 +284,18 @@ KA.initRawPage = function (pots) {
 
 // ── Inference page ─────────────────────────────────────────────────────────
 KA.initInferencePage = function (pots) {
-  var _infChartData = {}; // _infChartData[pot] = { rsmi: [], dates: [] }
-  var _lastInfTs = { A: null, B: null };
+  var _infChartData = {}; // _infChartData[pot] = { byTs: {timestamp: rsmi} } — see raw-page note on ordering
 
   function renderInfChart(pot) {
     var chartContainer = document.getElementById("chart-rsmi-" + pot);
-    if (!chartContainer || !_infChartData[pot] || !_infChartData[pot].rsmi.length) return;
-    var filt = _filterDataset(_infChartData[pot].rsmi, _infChartData[pot].dates, KA.currentFilter);
+    if (!chartContainer || !_infChartData[pot]) return;
+    var series = _sortedSeries(_infChartData[pot].byTs);
+    if (!series.values.length) return;
+    var filt = _filterDataset(series.values, series.dates, KA.currentFilter);
     var chart = KA.trendChart(filt.values, filt.dates, POT_COLOUR[pot], "", false);
     chartContainer.innerHTML = "";
     chartContainer.appendChild(chart);
+    _updateTrendBadge("trend-rsmi-" + pot, filt.values, "");
   }
 
   function updateFlagUI(pot, rows) {
@@ -327,15 +344,11 @@ KA.initInferencePage = function (pots) {
 
   // Initial load: full history
   pots.forEach(function (pot) {
-    _infChartData[pot] = { rsmi: [], dates: [] };
+    _infChartData[pot] = { byTs: {} };
     fetchJson("/api/inference?pot=" + pot + "&n=0")
       .then(function (rows) {
         if (!rows || !rows.length) return;
-        _lastInfTs[pot] = rows[rows.length - 1].timestamp;
-        rows.forEach(function (r) {
-          _infChartData[pot].rsmi.push(r.rsmi);
-          _infChartData[pot].dates.push(r.timestamp);
-        });
+        _mergeByTimestamp(_infChartData[pot].byTs, rows, "rsmi");
         renderInfChart(pot);
         updateFlagUI(pot, rows);
       })
@@ -349,21 +362,7 @@ KA.initInferencePage = function (pots) {
         .then(function (rows) {
           if (!rows || !rows.length) return;
           updateFlagUI(pot, rows);
-
-          var newRows = rows.filter(function (r) {
-            return !_lastInfTs[pot] || r.timestamp > _lastInfTs[pot];
-          });
-          if (newRows.length) {
-            _lastInfTs[pot] = newRows[newRows.length - 1].timestamp;
-            var lastRecordedTs = _infChartData[pot].dates.length ? _infChartData[pot].dates[_infChartData[pot].dates.length - 1] : null;
-            newRows.forEach(function (r) {
-              if (!lastRecordedTs || r.timestamp > lastRecordedTs) {
-                _infChartData[pot].rsmi.push(r.rsmi);
-                _infChartData[pot].dates.push(r.timestamp);
-                lastRecordedTs = r.timestamp;
-              }
-            });
-          }
+          _mergeByTimestamp(_infChartData[pot].byTs, rows, "rsmi");
           renderInfChart(pot);
         })
         .catch(function (e) { console.warn("inference live tick error:", e); });

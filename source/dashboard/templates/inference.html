@@ -23,7 +23,10 @@
   <section class="ka-pot-column" data-pot="{{ pot }}">
     <h2>Pot {{ pot }}</h2>
     <div class="ka-card">
-      <h3>RSMI Trend</h3>
+      <div class="ka-card-titlebar">
+        <h3>RSMI Trend</h3>
+        <span class="ka-card-trend" id="trend-rsmi-{{ pot }}"></span>
+      </div>
       <div class="ka-chart" id="chart-rsmi-{{ pot }}"></div>
     </div>
     <div class="ka-card">
