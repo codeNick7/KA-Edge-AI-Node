@@ -1,9 +1,10 @@
-"""Push client for the Karbon Assure soil-sensor ingestion API — Phase 1.
+"""Push client for the Karbon Assure soil-sensor ingestion API.
 
-Phase 1 scope only (per docs/plan/karbon-assure-ingestion-integration.md):
-config loading + the shared HMAC-signing helper every later phase's push
-calls reuse. push_evidence()/push_raw_batch() and the durable local queue
-are Phase 2/3 work, not built yet.
+Phase 2/3 (docs/plan/karbon-assure-ingestion-integration.md): push_evidence()
+and push_raw_batch() go through the durable local queue (sync_queue.py) --
+every record is queued first, only marked synced after a genuine 2xx, and
+survives board reboots. Local JSONL logging (main.py) stays the durable
+source of truth regardless of cloud-sync state.
 
 Config is read from environment variables, not hardcoded, matching the
 Karbon Assure backend's own env-var-first convention (e.g.
@@ -33,9 +34,18 @@ Usage (stdlib only, no dependencies -- matches scripts/'s convention):
 import hashlib
 import hmac
 import json
+import logging
 import os
 import urllib.error
 import urllib.request
+
+import sync_queue
+
+logger = logging.getLogger(__name__)
+
+# Bounded chunk size for a single raw-batch POST -- never one unbounded
+# request after a long outage (§5.3 point 4).
+MAX_RAW_BATCH_SIZE = 200
 
 
 class ConfigError(Exception):
@@ -97,6 +107,86 @@ def post_json(path: str, payload: dict, config: dict, timeout: float = 10.0) -> 
             return resp.status, json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         return exc.code, json.loads(exc.read().decode("utf-8"))
+
+
+def _try_send(path: str, payload: dict, config: dict) -> tuple[bool, str]:
+    """Attempt one send. Returns (success, error_message). Never raises --
+    callers (push_evidence/flush_pending) need this to be a clean boolean
+    so a network failure just leaves the record queued for retry."""
+    try:
+        status, response = post_json(path, payload, config)
+    except Exception as exc:  # noqa: BLE001 -- any failure just means "retry later"
+        return False, str(exc)
+
+    if 200 <= status < 300:
+        return True, ""
+    return False, f"HTTP {status}: {response}"
+
+
+def push_evidence(record: dict, config: dict, db_path: str = sync_queue.DEFAULT_DB_PATH) -> None:
+    """Queue an evidence record and attempt to send it immediately.
+
+    record is expected to already match the evidence payload shape
+    (node_id, project_id, pot_id, sample_index, timestamp, flag,
+    confidence, contributing_trend, model_version, schema_version,
+    time_uncertain, raw={rsmi, gas_index, temp_c, light_lux}).
+    Never raises -- push failures are queued for retry, not propagated.
+    """
+    key = f"{record['node_id']}|{record['pot_id']}|{record['sample_index']}"
+    queue_id = sync_queue.enqueue("evidence", key, record, db_path=db_path)
+    if queue_id is None:
+        return  # already queued (or already synced and purged) -- no-op
+
+    ok, error = _try_send("/v1/ingest/soil-sensor/evidence", record, config)
+    if ok:
+        sync_queue.mark_synced(queue_id, db_path=db_path)
+    else:
+        sync_queue.mark_failed(queue_id, error, db_path=db_path)
+        logger.warning("push_evidence failed, queued for retry: %s", error)
+
+
+def push_raw_batch(node_id: str, project_id: str, pot_id: str, readings: list[dict], config: dict,
+                    time_uncertain: bool = False, db_path: str = sync_queue.DEFAULT_DB_PATH) -> None:
+    """Queue a batch of raw readings, chunked to MAX_RAW_BATCH_SIZE, and
+    attempt to send each chunk immediately. Never raises."""
+    for start in range(0, len(readings), MAX_RAW_BATCH_SIZE):
+        chunk = readings[start:start + MAX_RAW_BATCH_SIZE]
+        chunk_key = f"{node_id}|{pot_id}|{chunk[0]['sample_index']}-{chunk[-1]['sample_index']}"
+        payload = {
+            "node_id": node_id,
+            "project_id": project_id,
+            "pot_id": pot_id,
+            "time_uncertain": time_uncertain,
+            "readings": chunk,
+        }
+        queue_id = sync_queue.enqueue("raw_batch", chunk_key, payload, db_path=db_path)
+        if queue_id is None:
+            continue
+
+        ok, error = _try_send("/v1/ingest/soil-sensor/raw", payload, config)
+        if ok:
+            sync_queue.mark_synced(queue_id, db_path=db_path)
+        else:
+            sync_queue.mark_failed(queue_id, error, db_path=db_path)
+            logger.warning("push_raw_batch chunk failed, queued for retry: %s", error)
+
+
+def flush_pending(config: dict, limit_per_kind: int = 20, db_path: str = sync_queue.DEFAULT_DB_PATH) -> dict:
+    """Retry everything past its backoff window. Call this periodically
+    (e.g. once per reading cycle) so records queued during an outage get
+    synced once connectivity returns -- architecture doc Section 9's
+    "sync resumes automatically once connectivity returns" requirement."""
+    results = {"evidence": {"sent": 0, "failed": 0}, "raw_batch": {"sent": 0, "failed": 0}}
+    for kind, path in (("evidence", "/v1/ingest/soil-sensor/evidence"), ("raw_batch", "/v1/ingest/soil-sensor/raw")):
+        for item in sync_queue.get_pending(kind, limit=limit_per_kind, db_path=db_path):
+            ok, error = _try_send(path, item["payload"], config)
+            if ok:
+                sync_queue.mark_synced(item["id"], db_path=db_path)
+                results[kind]["sent"] += 1
+            else:
+                sync_queue.mark_failed(item["id"], error, db_path=db_path)
+                results[kind]["failed"] += 1
+    return results
 
 
 def _selftest() -> None:
