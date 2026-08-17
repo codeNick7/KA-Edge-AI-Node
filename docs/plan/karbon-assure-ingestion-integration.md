@@ -159,7 +159,7 @@ The foundation everything else needs — testable in isolation using an endpoint
 that already exists, before any new code goes live.
 
 - **Karbon Assure side:**
-  - New migration on `iot_devices`: add `secret_hash` (§5.3 point 1 — per-device
+  - New migration on `iot_devices`: add `secret_encrypted` (§5.3 point 1 — per-device
     auth secret, not one shared global).
   - Register `edge-node-01` as one `IoTDevice` (`device_type="soil_sensor"`)
     against `ops`'s project (`project_code="demo-ops-01"`), generating and storing
@@ -390,7 +390,7 @@ catch-up batch from landing.
 ### Both endpoints share
 
 - **Auth: per-device secret, not one shared global** (§5.3 point 1). `IoTDevice`
-  gets a new `secret_hash` column (set at registration, never returned in any
+  gets a new `secret_encrypted` column (set at registration, never returned in any
   response), rather than everything trusting one `SOIL_SENSOR_DEVICE_SECRET` env
   var. `X-Webhook-Signature: sha256=<hex>` HMAC over the raw body, keyed by that
   device's own secret — same header shape as `satellite/webhook.py`, different
@@ -532,7 +532,7 @@ Phases 1-3 (point 1 → Phase 1; points 2,3,5,6,7,8 → Phase 2; point 4 → Pha
 not deferred nice-to-haves. Design detail for each is inline in §5.1 above; this is
 the checklist form for tracking during implementation.
 
-1. **Per-device secret, not one shared global.** New `secret_hash` column on
+1. **Per-device secret, not one shared global.** New `secret_encrypted` column on
    `IoTDevice`, set at registration. A compromised board only compromises itself.
 2. **Replay-safety via idempotency-check ordering, not just HMAC.** A signature
    proves integrity, not freshness. The `UNIQUE (node_id, pot_id, sample_index)`
