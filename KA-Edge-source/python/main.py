@@ -35,9 +35,15 @@ import os
 import socket
 import struct
 import time
+from collections import deque
 from datetime import datetime, timezone
 
 from arduino.app_utils import App, Bridge
+
+import push_to_karbon_assure as push_client
+from edge_node.features import compute_light_delta, compute_rsmi, compute_trend_slope
+from edge_node.trained_model import MODEL_VERSION, trained_predict
+from edge_node.validity import check_validity
 
 bridge = Bridge()
 
@@ -112,6 +118,119 @@ def _write_session_start(ntp_info: dict):
 # Run NTP check and log session start at import time
 _ntp_info = _ntp_sync_check()
 _write_session_start(_ntp_info)
+
+
+# ── Karbon Assure cloud push (docs/plan/karbon-assure-ingestion-integration.md) ─
+# Config comes from env vars (KARBON_ASSURE_API_BASE_URL/PROJECT_ID/NODE_ID/
+# DEVICE_SECRET) set on the board, not hardcoded. Missing config disables
+# push entirely rather than crashing the read loop -- the board must keep
+# working fully offline (local JSONL logging is the durable source of
+# truth regardless of cloud-sync state).
+try:
+    _push_config = push_client.load_config()
+    print("[Push] Karbon Assure config loaded — evidence/raw push enabled.", flush=True)
+except push_client.ConfigError as e:
+    _push_config = None
+    print(f"[Push] WARN: {e} — evidence/raw push disabled, logging locally only.", flush=True)
+
+TEXTURE = "clay_loam"  # must match source/dashboard/real_source.py's TEXTURE
+TREND_WINDOW = 7  # must match source/dashboard/real_source.py's TREND_WINDOW
+
+# Per-pot rolling history for feature/trend computation -- same window the
+# dashboard's RealDataSource._get_inference_locked uses, kept in memory here
+# so evidence can be computed and pushed per-reading, live, instead of only
+# ever being computed by a separate downstream dashboard process.
+_pot_history = {"A": deque(maxlen=TREND_WINDOW), "B": deque(maxlen=TREND_WINDOW)}
+
+# Per-pot raw-reading accumulation for the batch/raw path -- flushed once it
+# reaches MAX_RAW_BATCH_SIZE, matching the "chunked catch-up syncs" hardening
+# requirement (plan §5.3 point 4) rather than one push per reading.
+_raw_batch_buffer = {"A": [], "B": []}
+
+
+def _contributing_trend(rsmi_trend: float) -> str:
+    if rsmi_trend > 1e-4:
+        return "moisture_up"
+    if rsmi_trend < -1e-4:
+        return "moisture_down"
+    return "moisture_flat"
+
+
+def _push_evidence_if_ready(pot: str, rec: dict, sample_index: int):
+    """Append rec to pot's rolling history; once there's a full trend
+    window, compute rsmi/flag/confidence exactly like the dashboard's
+    RealDataSource does (same edge_node functions) and push it."""
+    if _push_config is None:
+        return
+
+    history = _pot_history[pot]
+    history.append(rec)
+    if len(history) < TREND_WINDOW:
+        return  # not enough history yet for a trend-window computation
+
+    hist_list = list(history)
+    rsmi = compute_rsmi(rec["moisture_pct"], TEXTURE)
+    rsmi_history = [compute_rsmi(r["moisture_pct"], TEXTURE) for r in hist_list]
+    light_history = [r["light_lux"] for r in hist_list]
+    gas_history = [r["gas_kohm"] for r in hist_list]
+
+    light_delta = compute_light_delta(light_history)
+    gas_index_trend = compute_trend_slope(gas_history)
+    rsmi_trend = compute_trend_slope(rsmi_history)
+    prev_moisture = hist_list[-2]["moisture_pct"] if len(hist_list) > 1 else None
+
+    validity = check_validity(rec["moisture_pct"], rec["gas_kohm"], rec["temp_c"], prev_moisture)
+    if validity.is_valid:
+        flag, confidence = trained_predict(rsmi, light_delta, gas_index_trend, rsmi_trend)
+    else:
+        flag, confidence = "sensor_fault", validity.validity_score
+
+    record = {
+        "node_id": _push_config["node_id"],
+        "project_id": _push_config["project_id"],
+        "pot_id": pot,
+        "sample_index": sample_index,
+        "timestamp": rec["received_at"],
+        "time_uncertain": not _ntp_info["ntp_synced"],
+        "flag": flag,
+        "confidence": round(confidence, 3),
+        "contributing_trend": _contributing_trend(rsmi_trend),
+        "model_version": MODEL_VERSION,
+        "schema_version": "1",
+        "raw": {
+            "rsmi": round(rsmi, 4),
+            "gas_index": rec["gas_kohm"],
+            "temp_c": rec["temp_c"],
+            "light_lux": rec["light_lux"],
+        },
+    }
+    push_client.push_evidence(record, _push_config)
+
+
+def _push_raw_if_batch_full(pot: str, rec: dict, sample_index: int):
+    if _push_config is None:
+        return
+
+    buf = _raw_batch_buffer[pot]
+    buf.append({
+        "sample_index": sample_index,
+        "millis_ms": rec["millis_ms"],
+        "temp_c": rec["temp_c"],
+        "humidity_pct": rec["humidity_pct"],
+        "pressure_hpa": rec["pressure_hpa"],
+        "gas_kohm": rec["gas_kohm"],
+        "light_lux": rec["light_lux"],
+        "moisture_pct": rec["moisture_pct"],
+        "received_at": rec["received_at"],
+    })
+    if len(buf) < push_client.MAX_RAW_BATCH_SIZE:
+        return
+
+    readings, _raw_batch_buffer[pot] = buf, []
+    push_client.push_raw_batch(
+        _push_config["node_id"], _push_config["project_id"], pot, readings,
+        _push_config, time_uncertain=not _ntp_info["ntp_synced"],
+    )
 
 
 # ── Bridge handlers ────────────────────────────────────────────────────────────
@@ -211,6 +330,19 @@ def handle_reading(msg):
     if not all_zero_b:
         with open(POT_B_PATH, "a") as f:
             f.write(json.dumps(rec_b) + "\n")
+
+    # Cloud push (never blocks/undoes the local JSONL write above, which
+    # already happened -- any push failure here is queued for retry by
+    # push_to_karbon_assure's own durable sync queue, not lost).
+    try:
+        if not all_zero_a:
+            _push_evidence_if_ready("A", rec_a, sample_index)
+            _push_raw_if_batch_full("A", rec_a, sample_index)
+        if not all_zero_b:
+            _push_evidence_if_ready("B", rec_b, sample_index)
+            _push_raw_if_batch_full("B", rec_b, sample_index)
+    except Exception as e:  # noqa: BLE001 — a push-path bug must never take down the read loop
+        print(f"[Push] WARN: cloud push failed for sample {sample_index}: {e}")
 
     print(
         f"[Reading #{sample_index}] "
