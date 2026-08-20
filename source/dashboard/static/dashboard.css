@@ -164,6 +164,14 @@ body {
   font-weight: 600;
   white-space: nowrap;
 }
+.ka-card-current {
+  font-size: 1.3rem;
+  font-weight: 700;
+  font-family: var(--font-display);
+  color: var(--foreground);
+  letter-spacing: -0.02em;
+  margin: 0.35rem 0 0.5rem;
+}
 
 .ka-placeholder-badge {
   font-size: 0.62rem;

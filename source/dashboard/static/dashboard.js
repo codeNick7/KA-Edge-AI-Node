@@ -206,6 +206,18 @@ function _updateTrendBadge(id, values, unit) {
   el.className = "ka-card-trend" + (d.cls ? " " + d.cls : "");
 }
 
+// Latest reading, always the true most-recent value regardless of the
+// active time-range filter — distinct from the trend badge, which is
+// computed only over the filtered window.
+function _updateCurrentValue(id, value, unit) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  unit = unit || "";
+  el.textContent = (value === null || value === undefined || isNaN(value))
+    ? ""
+    : "Current: " + value.toFixed(3) + unit;
+}
+
 function _renderCharts(pot) {
   var sensors = Object.keys(SENSOR_META);
   sensors.forEach(function (sensor) {
@@ -296,6 +308,7 @@ KA.initInferencePage = function (pots) {
     chartContainer.innerHTML = "";
     chartContainer.appendChild(chart);
     _updateTrendBadge("trend-rsmi-" + pot, filt.values, "");
+    _updateCurrentValue("current-rsmi-" + pot, series.values[series.values.length - 1], "");
   }
 
   function updateFlagUI(pot, rows) {
