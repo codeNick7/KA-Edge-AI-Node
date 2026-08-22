@@ -5,6 +5,10 @@
  * ~/workspace/Karbon-africa/distributed-app/web/app/corporate/project-health/page.tsx
  * (lines 249-319) so porting this to real .tsx later is mechanical
  * translation, not a redesign. Same math, same visual language.
+ *
+ * One deliberate divergence from that source component (2026-08-22): X
+ * position is time-based, not index-based -- see toX's comment below for
+ * why. Worth carrying back to the .tsx original too, not just noting here.
  */
 window.KA = window.KA || {};
 
@@ -46,7 +50,37 @@ KA.trendChart = function (values, dates, colour, unit, stressed) {
   var maxVal = Math.max.apply(null, nums);
   var range = (maxVal - minVal) || 0.001;
   var W = 240, H = 52, px = 6, py = 6;
-  var toX = function (i) { return px + (i / (nums.length - 1)) * (W - 2 * px); };
+
+  var validDates = numDates.filter(function (d) { return d != null; });
+  var firstDate = validDates[0];
+  var lastDate = validDates[validDates.length - 1];
+
+  // X position is proportional to actual elapsed time, not array index --
+  // a flat/uniform index spacing silently distorts any series whose point
+  // density varies (e.g. "Overall": ~1500 historical points spread across
+  // days, merged with live-tick points arriving every few seconds near
+  // "now" -- index spacing gives that dense recent cluster a fixed slice
+  // of chart width no matter how little real time it spans, which visually
+  // compresses into a misleading flat blob that grows the longer a page
+  // stays open). Falls back to index spacing only if a point's own
+  // timestamp is missing/unparseable, or every date collapses to the same
+  // instant (nothing to space by).
+  var msTimes = numDates.map(function (d) {
+    if (d == null) return null;
+    var t = new Date(d).getTime();
+    return isNaN(t) ? null : t;
+  });
+  var firstMs = firstDate != null ? new Date(firstDate).getTime() : null;
+  var lastMs = lastDate != null ? new Date(lastDate).getTime() : null;
+  var timeSpan = (firstMs != null && lastMs != null) ? lastMs - firstMs : 0;
+  var useTimeAxis = timeSpan > 0;
+
+  var toX = function (i) {
+    if (useTimeAxis && msTimes[i] != null) {
+      return px + ((msTimes[i] - firstMs) / timeSpan) * (W - 2 * px);
+    }
+    return px + (i / (nums.length - 1)) * (W - 2 * px);
+  };
   var toY = function (v) { return H - py - ((v - minVal) / range) * (H - 2 * py); };
   var pts = nums.map(function (v, i) { return { x: toX(i), y: toY(v) }; });
   var linePts = pts.map(function (p) { return p.x.toFixed(1) + "," + p.y.toFixed(1); }).join(" ");
@@ -54,10 +88,6 @@ KA.trendChart = function (values, dates, colour, unit, stressed) {
 
   var peakIdx = nums.indexOf(maxVal);
   var hasMidPeak = peakIdx > 0 && peakIdx < nums.length - 1;
-
-  var validDates = numDates.filter(function (d) { return d != null; });
-  var firstDate = validDates[0];
-  var lastDate = validDates[validDates.length - 1];
 
   var wrap = document.createElement("div");
 
@@ -127,10 +157,20 @@ KA.trendChart = function (values, dates, colour, unit, stressed) {
   }
 
   function _nearestIndex(clientX) {
+    // pts[i].x is no longer evenly spaced by index once useTimeAxis is true
+    // (see toX above), so a proportional index estimate can't locate the
+    // right point anymore -- search for the closest actual point position
+    // instead. pts.length is bounded (chart-cache decimation), so a linear
+    // scan here is cheap even on every mousemove.
     var rect = svg.getBoundingClientRect();
-    var ratio = rect.width ? (clientX - rect.left) / rect.width : 0;
-    ratio = Math.max(0, Math.min(1, ratio));
-    return Math.round(ratio * (nums.length - 1));
+    var scaleX = rect.width ? W / rect.width : 1;
+    var localX = (clientX - rect.left) * scaleX;
+    var best = 0, bestDist = Infinity;
+    for (var i = 0; i < pts.length; i++) {
+      var dist = Math.abs(pts[i].x - localX);
+      if (dist < bestDist) { bestDist = dist; best = i; }
+    }
+    return best;
   }
 
   function _showTooltip(clientX) {

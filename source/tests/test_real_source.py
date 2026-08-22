@@ -658,3 +658,25 @@ def test_inference_results_cache_stays_bounded_and_sidecar_stays_complete(tmp_pa
     cache_path = tmp_path / "pot_a_inference_cache.jsonl"
     with open(cache_path) as f:
         assert len(f.readlines()) == len(full)
+
+
+def test_startup_tolerates_a_torn_last_line_in_inference_sidecar(tmp_path):
+    """A process killed mid-write can leave a truncated last JSONL line in
+    the sidecar. __init__'s tail-seed of the results cache must skip it,
+    not crash the whole dashboard on startup (2026-08-22 board report:
+    json.decoder.JSONDecodeError at RealDataSource.__init__ on boot)."""
+    pot_a = tmp_path / "pot_a.jsonl"
+    pot_b = tmp_path / "pot_b.jsonl"
+    _write_fixture(pot_a, n=12, pot_id="A")
+    open(pot_b, "w").close()
+
+    # Prime a real sidecar, then append a torn (non-JSON) line to it,
+    # simulating a write that got cut off mid-flush.
+    RealDataSource(pot_a_path=str(pot_a), pot_b_path=str(pot_b))
+    cache_path = tmp_path / "pot_a_inference_cache.jsonl"
+    with open(cache_path, "a") as f:
+        f.write('{"timestamp": "2026-08-22T00:00:00+00:00", "rsmi": 0.5, "flag":')  # truncated, no trailing newline
+
+    # Must not raise.
+    source = RealDataSource(pot_a_path=str(pot_a), pot_b_path=str(pot_b))
+    assert source.get_inference("A", 0)

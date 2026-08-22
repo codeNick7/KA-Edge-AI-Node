@@ -238,7 +238,7 @@ class RealDataSource:
             self._inference_cache[pot] = {
                 "total_processed": self._count_lines(self._inference_cache_paths[pot]),
                 "results": deque(
-                    (json.loads(line) for line in _tail_lines(self._inference_cache_paths[pot], _TAIL_CACHE_SIZE)),
+                    self._parse_jsonl_tolerant(_tail_lines(self._inference_cache_paths[pot], _TAIL_CACHE_SIZE)),
                     maxlen=_TAIL_CACHE_SIZE,
                 ),
             }
@@ -275,6 +275,19 @@ class RealDataSource:
             return 0
         with open(path, "rb") as f:
             return sum(1 for line in f if line.strip())
+
+    @staticmethod
+    def _parse_jsonl_tolerant(lines):
+        """Yield json.loads(line) for each line, silently skipping any that
+        don't parse -- e.g. a torn line from a process killed mid-write.
+        Every other JSONL read in this file already has this tolerance
+        (see the try/except around each other json.loads call); this was
+        the one gap, in the __init__ tail-seed of the results cache."""
+        for line in lines:
+            try:
+                yield json.loads(line)
+            except json.JSONDecodeError:
+                continue
 
     def _seed_record_cache(self, pot: str, path: str) -> None:
         """Startup seed: count valid rows + capture the first-ever timestamp

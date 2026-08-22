@@ -161,16 +161,33 @@ KA.refreshStatus = function () {
   }).catch(function () {});
 };
 
+// light_lux has no real sensor yet (BH1750 not wired) -- until/unless the
+// board starts writing non-flat readings (real or a plausible stand-in;
+// see mock-data/synthetic_light_tool locally, gitignored, never committed),
+// every value is exactly 0 and the UI shows it as a "pending" placeholder
+// rather than a real "0.0 lx" reading. This is data-driven, not a fixed
+// on/off switch in the template, so the UI flips automatically the moment
+// real-looking data shows up (or reverts automatically if that data is
+// ever rolled back) with no redeploy needed either way.
+function _isLightPlaceholder(values) {
+  if (!values || !values.length) return true;
+  return values.every(function (v) { return !v; }); // 0, null, undefined all count
+}
+
 // ── raw value card (big number + label) ───────────────────────────────────
-function updateRawCard(pot, sensor, meta, rows) {
+function updateRawCard(pot, sensor, meta, rows, isPlaceholder) {
   var el = document.getElementById("raw-" + sensor + "-" + pot);
   if (!el) return;
   var latest = rows.length ? rows[rows.length - 1][sensor] : null;
-  // light_lux placeholder: show "—" when value is 0 (BH1750 not wired yet)
-  if (sensor === "light_lux" && latest === 0) latest = null;
+  if (sensor === "light_lux" && isPlaceholder && latest === 0) latest = null;
+  var label = meta.label;
+  if (sensor === "light_lux") {
+    el.classList.toggle("ka-raw-card--placeholder", !!isPlaceholder);
+    label = isPlaceholder ? "Light (pending)" : "Light";
+  }
   el.innerHTML =
     "<span class=\"ka-raw-val\">" + fmt(latest, meta.unit) + "</span>" +
-    "<span class=\"ka-raw-label\">" + meta.label + "</span>";
+    "<span class=\"ka-raw-label\">" + label + "</span>";
 }
 
 // ── chart state — per-pot, per-sensor history buffer ──────────────────────
@@ -231,11 +248,44 @@ function _updateCurrentValue(id, value, unit) {
     : "Current: " + value.toFixed(3) + unit;
 }
 
+// Whether pot's buffered light_lux series (everything seen so far, not just
+// the latest fetch batch) still looks like the flat-placeholder state.
+function _lightIsPlaceholder(pot) {
+  var buf = _chartData[pot] && _chartData[pot]["light_lux"];
+  if (!buf) return true;
+  return _isLightPlaceholder(_sortedSeries(buf.byTs).values);
+}
+
+// Page-level subtitle (not per-pot) — only claims "placeholder" while
+// BOTH pots still look flat; if either shows real-looking data, the note
+// switches to describing it honestly as a modeled stand-in, not a live
+// BH1750 reading (main.py itself is unchanged/still writes the flat 0.0
+// placeholder -- any non-flat data here came from a separate, uncommitted
+// local tool, not a real sensor).
+function _updateLightSensorNote() {
+  var el = document.getElementById("ka-light-sensor-note");
+  if (!el) return;
+  var stillPlaceholder = _lightIsPlaceholder("A") && _lightIsPlaceholder("B");
+  el.textContent = stillPlaceholder
+    ? "Light sensor: placeholder until BH1750 wired."
+    : "Light sensor: not physically wired yet — values shown are a modeled day/night stand-in, not a live reading.";
+}
+
 function _renderCharts(pot) {
   var sensors = Object.keys(SENSOR_META);
+  var lightPlaceholder = _lightIsPlaceholder(pot);
+  _updateLightSensorNote();
   sensors.forEach(function (sensor) {
     var container = document.getElementById("chart-" + sensor + "-" + pot);
     if (!container) return;
+    if (sensor === "light_lux") {
+      var card = container.closest(".ka-card");
+      if (card) {
+        card.classList.toggle("ka-card--placeholder", lightPlaceholder);
+        var badge = card.querySelector(".ka-placeholder-badge");
+        if (badge) badge.style.display = lightPlaceholder ? "" : "none";
+      }
+    }
     var buf = _ensureChartData(pot, sensor);
     var series = _sortedSeries(buf.byTs);
     if (!series.values.length) return;
@@ -268,8 +318,9 @@ KA.initRawPage = function (pots) {
         .then(function (rows) {
           if (rows && rows.length) {
             _appendRows(pot, rows);
+            var lightPlaceholder = _lightIsPlaceholder(pot);
             sensors.forEach(function (sensor) {
-              updateRawCard(pot, sensor, SENSOR_META[sensor], rows);
+              updateRawCard(pot, sensor, SENSOR_META[sensor], rows, lightPlaceholder);
             });
           }
           _renderCharts(pot);
@@ -295,12 +346,13 @@ KA.initRawPage = function (pots) {
         .then(function (rows) {
           if (!rows || !rows.length) return;
 
-          // Always update top value cards with latest reading
-          sensors.forEach(function (sensor) {
-            updateRawCard(pot, sensor, SENSOR_META[sensor], rows);
-          });
-
           _appendRows(pot, rows);
+
+          // Always update top value cards with latest reading
+          var lightPlaceholder = _lightIsPlaceholder(pot);
+          sensors.forEach(function (sensor) {
+            updateRawCard(pot, sensor, SENSOR_META[sensor], rows, lightPlaceholder);
+          });
 
           // Re-render chart so the rolling window and axis timestamps advance smoothly
           _renderCharts(pot);
