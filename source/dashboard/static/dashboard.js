@@ -257,18 +257,17 @@ function _lightIsPlaceholder(pot) {
 }
 
 // Page-level subtitle (not per-pot) — only claims "placeholder" while
-// BOTH pots still look flat; if either shows real-looking data, the note
-// switches to describing it honestly as a modeled stand-in, not a live
-// BH1750 reading (main.py itself is unchanged/still writes the flat 0.0
-// placeholder -- any non-flat data here came from a separate, uncommitted
-// local tool, not a real sensor).
+// BOTH pots still look flat (e.g. before the BH1750s were wired, or if a
+// unit stops responding); once either shows real variation, the note
+// confirms it's a live BH1750 reading (sketch.ino v7.3+, hardware-verified
+// 2026-08-22 — see its changelog for the Wire-bus fix this took).
 function _updateLightSensorNote() {
   var el = document.getElementById("ka-light-sensor-note");
   if (!el) return;
   var stillPlaceholder = _lightIsPlaceholder("A") && _lightIsPlaceholder("B");
   el.textContent = stillPlaceholder
     ? "Light sensor: placeholder until BH1750 wired."
-    : "Light sensor: not physically wired yet — values shown are a modeled day/night stand-in, not a live reading.";
+    : "Light sensor: live BH1750 reading.";
 }
 
 function _renderCharts(pot) {
