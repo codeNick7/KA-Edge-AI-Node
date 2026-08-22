@@ -11,6 +11,10 @@ Soil pin mapping corrected 2026-08-15 (see real_source.py header):
 API endpoints:
   /api/raw?pot=A&n=60     — last N readings (n=0 → full history)
   /api/inference?pot=A&n=60
+    Both also accept range=5m|15m|1h|today|week|overall and max_points=N
+    (only applied when n=0) to scope+decimate a full-history chart request
+    down to what's actually renderable instead of returning every row ever
+    collected — see real_source.py's _slice_by_range/_decimate.
   /api/status             — session metadata (collecting since, NTP sync, counts,
                              SD card used/free/total MB from the MCU's physical card)
   /api/download/csv?pot=A — download JSONL as CSV (pot=A, pot=B, or omit for both)
@@ -63,7 +67,9 @@ def api_raw():
     n = request.args.get("n", DEFAULT_N, type=int)
     if pot not in POTS:
         return jsonify({"error": f"unknown pot {pot!r}, expected one of {POTS}"}), 400
-    return jsonify(_source_for(pot).get_raw(pot, n))
+    chart_range = request.args.get("range")
+    max_points = request.args.get("max_points", type=int)
+    return jsonify(_source_for(pot).get_raw(pot, n, range=chart_range, max_points=max_points))
 
 
 @app.route("/api/inference")
@@ -72,7 +78,9 @@ def api_inference():
     n = request.args.get("n", DEFAULT_N, type=int)
     if pot not in POTS:
         return jsonify({"error": f"unknown pot {pot!r}, expected one of {POTS}"}), 400
-    return jsonify(_source_for(pot).get_inference(pot, n))
+    chart_range = request.args.get("range")
+    max_points = request.args.get("max_points", type=int)
+    return jsonify(_source_for(pot).get_inference(pot, n, range=chart_range, max_points=max_points))
 
 
 @app.route("/api/status")
@@ -100,30 +108,40 @@ def api_download_csv():
         "light_lux", "moisture_pct",
     ]
 
-    output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")
-    writer.writeheader()
+    def generate():
+        # Streams rows straight from disk via iter_raw_export_rows (2026-08-22
+        # OOM fix) instead of materializing the full, ever-growing history as
+        # one in-memory list before writing -- never holds more than one row
+        # (plus one small StringIO buffer) in memory regardless of file size.
+        buffer = io.StringIO()
+        writer = csv.DictWriter(buffer, fieldnames=fieldnames, extrasaction="ignore")
 
-    for pot in pots_to_export:
-        # get_raw with n=0 returns full history
-        rows = _real_source.get_raw(pot, n=0)
-        for row in rows:
-            writer.writerow({
-                "pot": pot,
-                "sample_index": "",        # not in _to_raw_row; omit gracefully
-                "received_at": row.get("timestamp", ""),
-                "millis_ms": "",
-                "temp_c": row.get("temp_c", ""),
-                "humidity_pct": row.get("humidity_pct", ""),
-                "pressure_hpa": row.get("pressure_hpa", ""),
-                "gas_kohm": row.get("gas_index", ""),
-                "light_lux": row.get("light_lux", ""),
-                "moisture_pct": row.get("moisture_pct", ""),
-            })
+        writer.writeheader()
+        yield buffer.getvalue()
+        buffer.seek(0)
+        buffer.truncate(0)
+
+        for pot in pots_to_export:
+            for row in _real_source.iter_raw_export_rows(pot):
+                writer.writerow({
+                    "pot": pot,
+                    "sample_index": "",        # not in _to_raw_row; omit gracefully
+                    "received_at": row.get("timestamp", ""),
+                    "millis_ms": "",
+                    "temp_c": row.get("temp_c", ""),
+                    "humidity_pct": row.get("humidity_pct", ""),
+                    "pressure_hpa": row.get("pressure_hpa", ""),
+                    "gas_kohm": row.get("gas_index", ""),
+                    "light_lux": row.get("light_lux", ""),
+                    "moisture_pct": row.get("moisture_pct", ""),
+                })
+                yield buffer.getvalue()
+                buffer.seek(0)
+                buffer.truncate(0)
 
     filename = f"ka_edge_pot{'_' + pot_param if pot_param else '_all'}_readings.csv"
     return Response(
-        output.getvalue(),
+        generate(),
         mimetype="text/csv",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )

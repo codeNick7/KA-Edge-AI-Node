@@ -22,7 +22,19 @@ KA.trendDelta = function (values, unit) {
 
 KA.trendChart = function (values, dates, colour, unit, stressed) {
   unit = unit || "";
-  var nums = values.filter(function (v) { return v !== null && v !== undefined && !isNaN(v); });
+  // Keep value/date pairs aligned by filtering them together — filtering
+  // nums and dates independently (the old behaviour) silently breaks index
+  // alignment between the two arrays the moment either contains a gap, which
+  // the per-point hover tooltip below depends on being correct.
+  var pairs = [];
+  for (var vi = 0; vi < values.length; vi++) {
+    var v = values[vi];
+    if (v !== null && v !== undefined && !isNaN(v)) {
+      pairs.push({ v: v, d: (dates && dates[vi] != null) ? dates[vi] : null });
+    }
+  }
+  var nums = pairs.map(function (p) { return p.v; });
+  var numDates = pairs.map(function (p) { return p.d; });
   if (nums.length < 2) {
     var empty = document.createElement("div");
     empty.className = "ka-trend-empty";
@@ -43,7 +55,7 @@ KA.trendChart = function (values, dates, colour, unit, stressed) {
   var peakIdx = nums.indexOf(maxVal);
   var hasMidPeak = peakIdx > 0 && peakIdx < nums.length - 1;
 
-  var validDates = (dates || []).filter(function (d) { return d != null; });
+  var validDates = numDates.filter(function (d) { return d != null; });
   var firstDate = validDates[0];
   var lastDate = validDates[validDates.length - 1];
 
@@ -92,7 +104,85 @@ KA.trendChart = function (values, dates, colour, unit, stressed) {
   lastDot.setAttribute("fill", colour);
   svg.appendChild(lastDot);
 
+  // ── Hover tooltip: value + timestamp + point-to-point trend arrow ───────
+  var hoverDot = document.createElementNS(svgNs, "circle");
+  hoverDot.setAttribute("r", "3");
+  hoverDot.setAttribute("fill", colour);
+  hoverDot.setAttribute("stroke", "#fff");
+  hoverDot.setAttribute("stroke-width", "1");
+  hoverDot.setAttribute("class", "ka-trend-hoverdot");
+  svg.appendChild(hoverDot);
+
+  var tooltip = document.createElement("div");
+  tooltip.className = "ka-trend-tooltip";
+
+  // Same up/down/stable thresholds+classes as KA.trendDelta, computed
+  // point-to-point instead of start-to-end.
+  function _pointArrow(idx) {
+    if (idx <= 0) return { text: "—", cls: "ka-trend-stable" };
+    var delta = nums[idx] - nums[idx - 1];
+    if (delta < -0.001) return { text: "↓", cls: "ka-trend-down" };
+    if (delta > 0.001) return { text: "↑", cls: "ka-trend-up" };
+    return { text: "→", cls: "ka-trend-stable" };
+  }
+
+  function _nearestIndex(clientX) {
+    var rect = svg.getBoundingClientRect();
+    var ratio = rect.width ? (clientX - rect.left) / rect.width : 0;
+    ratio = Math.max(0, Math.min(1, ratio));
+    return Math.round(ratio * (nums.length - 1));
+  }
+
+  function _showTooltip(clientX) {
+    var idx = _nearestIndex(clientX);
+    var p = pts[idx];
+    hoverDot.setAttribute("cx", p.x);
+    hoverDot.setAttribute("cy", p.y);
+    hoverDot.setAttribute("visibility", "visible");
+
+    var arrow = _pointArrow(idx);
+    tooltip.innerHTML = "";
+    var tsSpan = document.createElement("span");
+    tsSpan.className = "ka-trend-tooltip-ts";
+    tsSpan.textContent = numDates[idx] ? KA.fmtTimeOrDate(numDates[idx], spanMs) : "";
+    var valSpan = document.createElement("span");
+    valSpan.className = "ka-trend-tooltip-val";
+    valSpan.textContent = nums[idx].toFixed(3) + unit;
+    var arrowSpan = document.createElement("span");
+    arrowSpan.className = "ka-trend-tooltip-arrow " + arrow.cls;
+    arrowSpan.textContent = arrow.text;
+    tooltip.appendChild(tsSpan);
+    tooltip.appendChild(valSpan);
+    tooltip.appendChild(arrowSpan);
+
+    // Anchor horizontally to the point's position (fraction of the SVG's
+    // viewBox width), clamped so the tooltip doesn't overflow the box.
+    var leftPct = (p.x / W) * 100;
+    leftPct = Math.max(8, Math.min(92, leftPct));
+    tooltip.style.left = leftPct + "%";
+    tooltip.style.visibility = "visible";
+  }
+
+  function _hideTooltip() {
+    hoverDot.setAttribute("visibility", "hidden");
+    tooltip.style.visibility = "hidden";
+  }
+
+  hoverDot.setAttribute("visibility", "hidden");
+  tooltip.style.visibility = "hidden";
+
+  svg.addEventListener("mousemove", function (e) { _showTooltip(e.clientX); });
+  svg.addEventListener("mouseleave", _hideTooltip);
+  svg.addEventListener("touchmove", function (e) {
+    if (e.touches && e.touches.length) {
+      _showTooltip(e.touches[0].clientX);
+      e.preventDefault();
+    }
+  }, { passive: false });
+  svg.addEventListener("touchend", _hideTooltip);
+
   box.appendChild(svg);
+  box.appendChild(tooltip);
   wrap.appendChild(box);
 
   var spanMs = (firstDate && lastDate) ? (new Date(lastDate).getTime() - new Date(firstDate).getTime()) : 0;

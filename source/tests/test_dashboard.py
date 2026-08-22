@@ -5,12 +5,15 @@ MockDataSource is still tested in isolation for its own correctness.
 """
 
 import json
+from datetime import datetime, timedelta, timezone
 
 import dashboard.app as dashboard_app
 from dashboard.app import app
 from dashboard.mock_source import MockDataSource
 from dashboard.real_source import PLACEHOLDER_LIGHT_LUX, RealDataSource
 from edge_node.trained_model import MODEL_VERSION
+
+_FIXTURE_EPOCH = datetime(2026, 8, 13, 10, 0, 0, tzinfo=timezone.utc)
 
 
 def client():
@@ -19,7 +22,11 @@ def client():
 
 
 def _write_fixture(path, n=15, pot_id="A"):
-    """Write n v6.0 JSONL records to path."""
+    """Write n v6.0 JSONL records to path.
+
+    received_at uses real datetime arithmetic so it stays valid for n > 59
+    -- see test_real_source.py's identical fixture for the full rationale.
+    """
     base_temp = {"A": 24.0, "B": 28.0}[pot_id]
     with open(path, "w") as f:
         for i in range(1, n + 1):
@@ -34,7 +41,7 @@ def _write_fixture(path, n=15, pot_id="A"):
                         "gas_kohm": 10.0 + i,
                         "light_lux": 0.0,     # BH1750 placeholder
                         "moisture_pct": 2.0,
-                        "received_at": f"2026-08-13T10:00:{i:02d}+00:00",
+                        "received_at": (_FIXTURE_EPOCH + timedelta(seconds=i)).isoformat(),
                     }
                 )
                 + "\n"
@@ -146,6 +153,68 @@ def test_api_status_reports_sd_card_space(tmp_path, monkeypatch):
     assert body["sd_used_mb"] == 12.4
     assert body["sd_free_mb"] == 1987.6
     assert body["sd_total_mb"] == 2000.0
+
+
+def test_api_download_csv_streams_full_history_for_one_pot(tmp_path, monkeypatch):
+    """CSV export (2026-08-22 streaming rewrite) must still return every row,
+    byte-for-byte the same shape as before, just produced via a generator."""
+    pot_a = tmp_path / "pot_a.jsonl"
+    pot_b = tmp_path / "pot_b.jsonl"
+    _write_fixture(pot_a, n=15, pot_id="A")
+    open(pot_b, "w").close()
+    monkeypatch.setattr(
+        dashboard_app,
+        "_real_source",
+        RealDataSource(pot_a_path=str(pot_a), pot_b_path=str(pot_b)),
+    )
+
+    c = client()
+    resp = c.get("/api/download/csv?pot=A")
+    assert resp.status_code == 200
+    assert resp.mimetype == "text/csv"
+    body = resp.get_data(as_text=True)
+    lines = [l for l in body.splitlines() if l]
+    assert lines[0].startswith("pot,sample_index,received_at")
+    assert len(lines) == 1 + 15  # header + 15 rows
+    assert all(line.startswith("A,") for line in lines[1:])
+
+
+def test_api_download_csv_omit_pot_exports_both(tmp_path, monkeypatch):
+    pot_a = tmp_path / "pot_a.jsonl"
+    pot_b = tmp_path / "pot_b.jsonl"
+    _write_fixture(pot_a, n=5, pot_id="A")
+    _write_fixture(pot_b, n=3, pot_id="B")
+    monkeypatch.setattr(
+        dashboard_app,
+        "_real_source",
+        RealDataSource(pot_a_path=str(pot_a), pot_b_path=str(pot_b)),
+    )
+
+    c = client()
+    resp = c.get("/api/download/csv")
+    body = resp.get_data(as_text=True)
+    lines = [l for l in body.splitlines() if l]
+    assert len(lines) == 1 + 5 + 3
+
+
+def test_api_raw_range_scoped_chart_fetch(tmp_path, monkeypatch):
+    """range=overall&max_points=... (dashboard.js's actual fetch shape) must
+    work end-to-end through the HTTP layer, not just the Python API."""
+    pot_a = tmp_path / "pot_a.jsonl"
+    pot_b = tmp_path / "pot_b.jsonl"
+    _write_fixture(pot_a, n=500, pot_id="A")
+    open(pot_b, "w").close()
+    monkeypatch.setattr(
+        dashboard_app,
+        "_real_source",
+        RealDataSource(pot_a_path=str(pot_a), pot_b_path=str(pot_b)),
+    )
+
+    c = client()
+    resp = c.get("/api/raw?pot=A&n=0&range=overall&max_points=50")
+    assert resp.status_code == 200
+    rows = resp.get_json()
+    assert 0 < len(rows) <= 100
 
 
 def test_api_rejects_unknown_pot():

@@ -8,9 +8,12 @@ and serves both pots from real data.
 import json
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 
-from dashboard.real_source import PLACEHOLDER_LIGHT_LUX, RealDataSource
+from dashboard.real_source import PLACEHOLDER_LIGHT_LUX, RealDataSource, _TAIL_CACHE_SIZE
 from edge_node.trained_model import MODEL_VERSION
+
+_FIXTURE_EPOCH = datetime(2026, 8, 13, 10, 0, 0, tzinfo=timezone.utc)
 
 
 def _write_fixture(path, n=12, pot_id="A"):
@@ -19,6 +22,14 @@ def _write_fixture(path, n=12, pot_id="A"):
     Uses v6.0 field schema: sample_index, millis_ms, temp_c, humidity_pct,
     pressure_hpa, gas_kohm, light_lux, moisture_pct, received_at.
     moisture_pct is always present (sketch v6.0 always emits it).
+
+    received_at uses real datetime arithmetic (not an f-string seconds
+    field) so it stays a valid, monotonically-sortable ISO timestamp for any
+    n -- for n <= 59 this produces byte-identical strings to the old
+    "...T10:00:{i:02d}+00:00" format (still "2026-08-13T10:00:01+00:00" for
+    i=1, etc.), so existing hardcoded-string assertions are unaffected; for
+    n > 59 it correctly rolls into minutes/hours instead of producing an
+    invalid/lexicographically-broken seconds field like "10:00:99".
     """
     base_temp = {"A": 24.0, "B": 28.0}[pot_id]
     with open(path, "w") as f:
@@ -32,7 +43,7 @@ def _write_fixture(path, n=12, pot_id="A"):
                 "gas_kohm": 10.0 + i,
                 "light_lux": 0.0,        # BH1750 placeholder
                 "moisture_pct": 2.0,     # dry desk reading
-                "received_at": f"2026-08-13T10:00:{i:02d}+00:00",
+                "received_at": (_FIXTURE_EPOCH + timedelta(seconds=i)).isoformat(),
             }
             f.write(json.dumps(record) + "\n")
 
@@ -416,3 +427,234 @@ def test_all_zero_bme_rows_are_skipped(tmp_path):
     rows = source.get_raw("A", 10)
     assert len(rows) == 1
     assert rows[0]["temp_c"] == 24.1
+
+
+# ── Persisted inference cache (2026-08-22 dashboard perf work) ─────────────
+
+def test_inference_cache_persists_across_restart(tmp_path, monkeypatch):
+    """A fresh RealDataSource on the same paths (simulating a process
+    restart) must load the previous run's inference results from the
+    on-disk sidecar instead of recomputing them — the whole point of
+    persisting it is to avoid repaying the full O(history) recompute."""
+    import dashboard.real_source as real_source_module
+
+    pot_a = tmp_path / "pot_a.jsonl"
+    pot_b = tmp_path / "pot_b.jsonl"
+    _write_fixture(pot_a, n=12, pot_id="A")
+    open(pot_b, "w").close()
+
+    first = RealDataSource(pot_a_path=str(pot_a), pot_b_path=str(pot_b))
+    expected = first.get_inference("A", 0)
+    assert expected  # sanity: TREND_WINDOW=7, n=12 -> 6 results
+
+    cache_path = tmp_path / "pot_a_inference_cache.jsonl"
+    assert cache_path.exists()
+    with open(cache_path) as f:
+        assert len(f.readlines()) == len(expected)
+
+    call_count = {"n": 0}
+    real_trained_predict = real_source_module.trained_predict
+
+    def _counting_trained_predict(*args, **kwargs):
+        call_count["n"] += 1
+        return real_trained_predict(*args, **kwargs)
+
+    monkeypatch.setattr(real_source_module, "trained_predict", _counting_trained_predict)
+
+    second = RealDataSource(pot_a_path=str(pot_a), pot_b_path=str(pot_b))
+    actual = second.get_inference("A", 0)
+
+    assert actual == expected
+    assert call_count["n"] == 0  # nothing recomputed -- loaded straight from disk
+
+
+def test_inference_cache_only_computes_newly_arrived_rows_after_restart(tmp_path, monkeypatch):
+    import dashboard.real_source as real_source_module
+
+    pot_a = tmp_path / "pot_a.jsonl"
+    pot_b = tmp_path / "pot_b.jsonl"
+    _write_fixture(pot_a, n=12, pot_id="A")
+    open(pot_b, "w").close()
+
+    first = RealDataSource(pot_a_path=str(pot_a), pot_b_path=str(pot_b))
+    first.get_inference("A", 0)
+
+    _write_fixture(pot_a, n=15, pot_id="A")  # 3 new rows arrive after "restart"
+
+    call_count = {"n": 0}
+    real_trained_predict = real_source_module.trained_predict
+
+    def _counting_trained_predict(*args, **kwargs):
+        call_count["n"] += 1
+        return real_trained_predict(*args, **kwargs)
+
+    monkeypatch.setattr(real_source_module, "trained_predict", _counting_trained_predict)
+
+    second = RealDataSource(pot_a_path=str(pot_a), pot_b_path=str(pot_b))
+    actual = second.get_inference("A", 0)
+
+    assert len(actual) == 15 - 6  # TREND_WINDOW - 1
+    assert call_count["n"] == 3  # only the 3 newly-arrived rows recomputed
+
+
+def test_inference_cache_invalidated_when_file_shrinks(tmp_path):
+    """Truncation/rotation must drop the stale persisted cache, not just the
+    in-memory one -- otherwise a later append would duplicate ahead of it."""
+    pot_a = tmp_path / "pot_a.jsonl"
+    pot_b = tmp_path / "pot_b.jsonl"
+    _write_fixture(pot_a, n=12, pot_id="A")
+    open(pot_b, "w").close()
+
+    source = RealDataSource(pot_a_path=str(pot_a), pot_b_path=str(pot_b))
+    source.get_inference("A", 0)
+
+    _write_fixture(pot_a, n=8, pot_id="A")  # shrink
+    results = source.get_inference("A", 0)
+    assert len(results) == 8 - 6
+
+    cache_path = tmp_path / "pot_a_inference_cache.jsonl"
+    with open(cache_path) as f:
+        assert len(f.readlines()) == len(results)
+
+
+# ── Range filtering + decimation (2026-08-22 dashboard perf work) ─────────
+
+def _write_spread_fixture(path, timestamps):
+    """One row per ISO timestamp given, otherwise identical shape to
+    _write_fixture -- used where exact cutoff boundaries matter."""
+    with open(path, "w") as f:
+        for i, ts in enumerate(timestamps, start=1):
+            f.write(json.dumps({
+                "sample_index": i, "millis_ms": i * 1000,
+                "temp_c": 20.0 + i * 0.01, "humidity_pct": 55.0, "pressure_hpa": 1013.0,
+                "gas_kohm": 10.0, "light_lux": 100.0, "moisture_pct": 5.0,
+                "received_at": ts,
+            }) + "\n")
+
+
+def test_range_5m_only_includes_last_5_minutes(tmp_path):
+    pot_a = tmp_path / "pot_a.jsonl"
+    pot_b = tmp_path / "pot_b.jsonl"
+    timestamps = [
+        "2026-08-20T09:50:00+00:00",  # 10m before last -- excluded
+        "2026-08-20T09:56:00+00:00",  # 4m before last -- included
+        "2026-08-20T09:58:00+00:00",  # 2m before last -- included
+        "2026-08-20T10:00:00+00:00",  # last reading, anchors the cutoff
+    ]
+    _write_spread_fixture(pot_a, timestamps)
+    open(pot_b, "w").close()
+    source = RealDataSource(pot_a_path=str(pot_a), pot_b_path=str(pot_b))
+
+    rows = source.get_raw("A", 0, range="5m")
+    assert [r["timestamp"] for r in rows] == timestamps[1:]
+
+
+def test_range_overall_returns_everything(tmp_path):
+    pot_a = tmp_path / "pot_a.jsonl"
+    pot_b = tmp_path / "pot_b.jsonl"
+    _write_fixture(pot_a, n=10, pot_id="A")
+    open(pot_b, "w").close()
+    source = RealDataSource(pot_a_path=str(pot_a), pot_b_path=str(pot_b))
+
+    assert len(source.get_raw("A", 0, range="overall")) == 10
+    assert len(source.get_raw("A", 0)) == 10  # range=None behaves the same
+
+
+def test_range_falls_back_to_full_series_when_window_too_sparse(tmp_path):
+    """A too-narrow window that would leave <2 points must fall back to the
+    full series rather than rendering an unusably sparse/empty chart."""
+    pot_a = tmp_path / "pot_a.jsonl"
+    pot_b = tmp_path / "pot_b.jsonl"
+    timestamps = [
+        "2026-08-20T09:00:00+00:00",
+        "2026-08-20T09:30:00+00:00",
+        "2026-08-20T10:00:00+00:00",
+    ]
+    _write_spread_fixture(pot_a, timestamps)
+    open(pot_b, "w").close()
+    source = RealDataSource(pot_a_path=str(pot_a), pot_b_path=str(pot_b))
+
+    rows = source.get_raw("A", 0, range="5m")  # only the last row is within 5m
+    assert len(rows) == 3
+
+
+def test_max_points_decimates_large_series_but_keeps_last_row(tmp_path):
+    pot_a = tmp_path / "pot_a.jsonl"
+    pot_b = tmp_path / "pot_b.jsonl"
+    _write_fixture(pot_a, n=500, pot_id="A")
+    open(pot_b, "w").close()
+    source = RealDataSource(pot_a_path=str(pot_a), pot_b_path=str(pot_b))
+
+    full = source.get_raw("A", 0)
+    assert len(full) == 500
+
+    decimated = source.get_raw("A", 0, max_points=50)
+    assert 0 < len(decimated) <= 100  # bounded near max_points (stride sampling, not exact)
+    assert decimated[-1] == full[-1]  # exact most-recent row always kept
+
+
+def test_max_points_is_noop_when_series_already_fits(tmp_path):
+    pot_a = tmp_path / "pot_a.jsonl"
+    pot_b = tmp_path / "pot_b.jsonl"
+    _write_fixture(pot_a, n=10, pot_id="A")
+    open(pot_b, "w").close()
+    source = RealDataSource(pot_a_path=str(pot_a), pot_b_path=str(pot_b))
+
+    assert source.get_raw("A", 0, max_points=1500) == source.get_raw("A", 0)
+
+
+def test_max_points_and_range_apply_only_to_full_history_requests(tmp_path):
+    """n > 0 (the live-tick path) must ignore range/max_points entirely --
+    only n=0 (full-history) requests are scoped/decimated."""
+    pot_a = tmp_path / "pot_a.jsonl"
+    pot_b = tmp_path / "pot_b.jsonl"
+    _write_fixture(pot_a, n=10, pot_id="A")
+    open(pot_b, "w").close()
+    source = RealDataSource(pot_a_path=str(pot_a), pot_b_path=str(pot_b))
+
+    with_extras = source.get_raw("A", 5, range="5m", max_points=1)
+    without_extras = source.get_raw("A", 5)
+    assert with_extras == without_extras
+    assert len(with_extras) == 5
+
+
+# ── Bounded memory (2026-08-22 OOM fix) ────────────────────────────────────
+
+def test_record_cache_stays_bounded_regardless_of_history_size(tmp_path):
+    """The in-memory tail cache must never grow past _TAIL_CACHE_SIZE, even
+    when the underlying file has far more rows -- this is the actual fix for
+    the board's OOM kill (dmesg-confirmed: anon-rss ~1GB / 1.7GB total)."""
+    n = _TAIL_CACHE_SIZE + 1000
+    pot_a = tmp_path / "pot_a.jsonl"
+    pot_b = tmp_path / "pot_b.jsonl"
+    _write_fixture(pot_a, n=n, pot_id="A")
+    open(pot_b, "w").close()
+    source = RealDataSource(pot_a_path=str(pot_a), pot_b_path=str(pot_b))
+
+    assert len(source._record_cache["A"]["records"]) <= _TAIL_CACHE_SIZE
+    assert source._record_cache["A"]["total_raw_seen"] == n
+
+    # Full history must still be reachable (via disk streaming), just not
+    # all resident in memory at once.
+    full = source.get_raw("A", 0)
+    assert len(full) == n
+
+    status = source.get_status()
+    assert status["total_readings_a"] == n
+
+
+def test_inference_results_cache_stays_bounded_and_sidecar_stays_complete(tmp_path):
+    n = _TAIL_CACHE_SIZE + 500
+    pot_a = tmp_path / "pot_a.jsonl"
+    pot_b = tmp_path / "pot_b.jsonl"
+    _write_fixture(pot_a, n=n, pot_id="A")
+    open(pot_b, "w").close()
+    source = RealDataSource(pot_a_path=str(pot_a), pot_b_path=str(pot_b))
+
+    full = source.get_inference("A", 0)
+    assert len(full) == n - 6  # TREND_WINDOW - 1
+    assert len(source._inference_cache["A"]["results"]) <= _TAIL_CACHE_SIZE
+
+    cache_path = tmp_path / "pot_a_inference_cache.jsonl"
+    with open(cache_path) as f:
+        assert len(f.readlines()) == len(full)

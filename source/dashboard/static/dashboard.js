@@ -10,6 +10,7 @@ window.KA = window.KA || {};
 
 KA.REFRESH_MS  = 5000;   // 5s auto-refresh cadence
 KA.N_LIVE      = 60;     // points fetched on each live tick (tail only)
+KA.CHART_MAX_POINTS = 1500; // decimation cap for range-scoped chart fetches (n=0)
 KA.currentFilter = "overall"; // "5m" | "15m" | "1h" | "today" | "week" | "overall"
 
 
@@ -39,6 +40,18 @@ function fetchJson(url) {
     if (!r.ok) throw new Error("request failed: " + url);
     return r.json();
   });
+}
+
+// Range-scoped, decimated full-history fetch for chart rendering (n=0, plus
+// range+max_points so the server bounds the payload to what's actually
+// renderable instead of every row ever collected — see real_source.py's
+// _slice_by_range/_decimate, 2026-08-22 dashboard perf work). Used for both
+// the initial page load and every filter switch; live tick stays a plain
+// n=N_LIVE fetch (see liveTick in initRawPage/initInferencePage).
+function fetchChartRows(endpoint, pot, filter) {
+  return fetchJson(
+    endpoint + "?pot=" + pot + "&n=0&range=" + filter + "&max_points=" + KA.CHART_MAX_POINTS
+  );
 }
 
 function fmt(val, unit) {
@@ -249,26 +262,31 @@ KA.initRawPage = function (pots) {
     if (sub) sub.textContent = POT_LABEL[pot] || "";
   });
 
-  // Setup time range filter buttons
-  _setupFilterListeners("raw-filter-group", function () {
-    pots.forEach(_renderCharts);
-  });
-
-  // Load full history on page load, then refresh status bar
-  KA.refreshStatus();
-  pots.forEach(function (pot) {
-    fetchJson("/api/raw?pot=" + pot + "&n=0")
-      .then(function (rows) {
-        if (rows && rows.length) {
-          _appendRows(pot, rows);
-          sensors.forEach(function (sensor) {
-            updateRawCard(pot, sensor, SENSOR_META[sensor], rows);
-          });
+  function loadFilterScopedData() {
+    pots.forEach(function (pot) {
+      fetchChartRows("/api/raw", pot, KA.currentFilter)
+        .then(function (rows) {
+          if (rows && rows.length) {
+            _appendRows(pot, rows);
+            sensors.forEach(function (sensor) {
+              updateRawCard(pot, sensor, SENSOR_META[sensor], rows);
+            });
+          }
           _renderCharts(pot);
-        }
-      })
-      .catch(function (e) { console.warn("initial history fetch error:", e); });
-  });
+        })
+        .catch(function (e) { console.warn("history fetch error:", e); });
+    });
+  }
+
+  // Setup time range filter buttons — each switch re-fetches, scoped+decimated
+  // to that filter, rather than just re-slicing whatever's already buffered
+  // (a sparse "overall" buffer alone isn't dense enough for narrow filters).
+  _setupFilterListeners("raw-filter-group", loadFilterScopedData);
+
+  // Load data scoped to the current (default "overall") filter on page load,
+  // then refresh status bar.
+  KA.refreshStatus();
+  loadFilterScopedData();
 
   function liveTick() {
     KA.refreshStatus();
@@ -350,23 +368,27 @@ KA.initInferencePage = function (pots) {
     }
   }
 
-  // Setup time range filter buttons
-  _setupFilterListeners("inference-filter-group", function () {
-    pots.forEach(renderInfChart);
-  });
+  pots.forEach(function (pot) { _infChartData[pot] = { byTs: {} }; });
 
-  // Initial load: full history
-  pots.forEach(function (pot) {
-    _infChartData[pot] = { byTs: {} };
-    fetchJson("/api/inference?pot=" + pot + "&n=0")
-      .then(function (rows) {
-        if (!rows || !rows.length) return;
-        _mergeByTimestamp(_infChartData[pot].byTs, rows, "rsmi");
-        renderInfChart(pot);
-        updateFlagUI(pot, rows);
-      })
-      .catch(function (e) { console.warn("inference initial fetch error:", e); });
-  });
+  function loadFilterScopedData() {
+    pots.forEach(function (pot) {
+      fetchChartRows("/api/inference", pot, KA.currentFilter)
+        .then(function (rows) {
+          if (!rows || !rows.length) return;
+          _mergeByTimestamp(_infChartData[pot].byTs, rows, "rsmi");
+          renderInfChart(pot);
+          updateFlagUI(pot, rows);
+        })
+        .catch(function (e) { console.warn("inference history fetch error:", e); });
+    });
+  }
+
+  // Setup time range filter buttons — each switch re-fetches, scoped+decimated
+  // to that filter (see initRawPage's identical rationale).
+  _setupFilterListeners("inference-filter-group", loadFilterScopedData);
+
+  // Load data scoped to the current (default "overall") filter on page load.
+  loadFilterScopedData();
 
   // Live polling: append new points and advance rolling window
   function liveTick() {
