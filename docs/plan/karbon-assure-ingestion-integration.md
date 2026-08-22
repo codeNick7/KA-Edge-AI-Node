@@ -1,8 +1,52 @@
 # Plan — Wire the Edge Node's inference to a real Karbon Assure ingestion API
 
 **Created:** 2026-08-16
-**Status:** Research + design complete (Phase 0 done, all decisions recorded §4,
-detailed design §5.1–§5.5). Ready to begin Phase 1 implementation.
+**Last updated:** 2026-08-21
+**Status:** Phases 0-4 implemented and committed on the board (Contest) side —
+device identity/HMAC signing (Phase 1, `ffc8853`), durable local sync queue +
+push_evidence/push_raw_batch (Phase 2/3, `feb80cd`), `main.py`'s live read loop
+now actually calling them (`ae43e6e`), abstract/deck docs updated (Phase 4,
+`958f22b`). Verified once end-to-end against a live demo API instance with a
+stubbed `arduino.app_utils` import and a real registered device (10 synthetic
+readings in, 4 real evidence records out via the trend-window path) — not yet
+run against the physical board or a live network push to the Karbon Assure dev
+server.
+
+**2026-08-21 — dual-destination push:** `push_to_karbon_assure.py`/`main.py`
+now push evidence and raw batches to *every configured destination
+simultaneously*, not just one. `load_config()` (single, unprefixed
+`KARBON_ASSURE_*`) was replaced as the board's entry point by `load_configs()`,
+which reads `KARBON_ASSURE_LOCAL_*` and `KARBON_ASSURE_CLOUD_*` (per-destination
+`API_BASE_URL`/`PROJECT_ID`/`NODE_ID`/`DEVICE_SECRET`) — one destination is the
+LAN-local demo backend, the other is the live `demo.karbon-assure.tech`
+instance. Each destination is a separate backend/database, so each has its own
+device registration, secret, and independent sync queue
+(`data/sync_queue_local.db` / `data/sync_queue_cloud.db` via
+`push_client.db_path_for(name)`) — an outage on one destination doesn't block
+or get blocked by the other. A destination with none of its four env vars set
+is simply skipped (not an error); a *partially* set destination still raises
+`ConfigError` (almost certainly a typo). **Breaking for existing `.env`
+files:** the old bare `KARBON_ASSURE_API_BASE_URL` etc. names are no longer
+read by `main.py` — they must be renamed to `KARBON_ASSURE_LOCAL_*` (existing
+tests still cover bare `load_config()` since `push_to_karbon_assure.py` keeps
+it as a general single-destination helper, just no longer main.py's entry
+point).
+
+**Not yet done / outstanding:**
+- Board (`KA-Edge-source/python/`) and MCU (`KA-Edge-source/sketch/sketch.ino`,
+  pin-mapping fix + SD-report disable, both committed since `621ce7a`/Aug 16)
+  have not been copied/flashed to the physical hardware yet — no data has
+  flowed from the real board.
+- `.env` on the board must be updated to the new `KARBON_ASSURE_LOCAL_*` /
+  `KARBON_ASSURE_CLOUD_*` names (by design, never committed). `LOCAL_API_BASE_URL`
+  must be the dev-server machine's LAN IP, not `localhost` (board and dev
+  server are two separate machines on the same LAN). `CLOUD_*` needs a device
+  registered against `demo.karbon-assure.tech` (its own DB, separate from the
+  local demo backend) to get a `CLOUD_PROJECT_ID`/`CLOUD_DEVICE_SECRET` — not
+  yet done, no device has been registered there.
+- §7's outstanding items (DDL read, blockchain-anchoring process confirmation,
+  `project_id` vs `project_code` trace) were never confirmed before Phase 2/3
+  code was written — still open.
 **Scope:** Two repos. This one (Contest) is the board/client side. The API lives in
 `~/workspace/Karbon-africa/distributed-app` (Karbon Assure's production backend) — a
 separate, unfamiliar-to-this-session codebase that already exists and has its own

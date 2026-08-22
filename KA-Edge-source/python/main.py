@@ -1,4 +1,19 @@
-# v3.0 — dual-pot relay with NTP time sync and persistent data (no truncation on restart).
+# v3.2 — push evidence/raw readings to multiple Karbon Assure destinations
+# simultaneously (local LAN demo backend + live demo.karbon-assure.tech),
+# each with its own device/secret and its own independent sync queue.
+#
+# Changes vs v3.1:
+#   - push_client.load_config() -> load_configs(): reads KARBON_ASSURE_LOCAL_*
+#     and KARBON_ASSURE_CLOUD_* (see push_to_karbon_assure.py's docstring)
+#     instead of a single unprefixed KARBON_ASSURE_* set. A destination with
+#     no vars set is skipped, not an error -- "cloud" can be added later via
+#     .env alone.
+#   - Each destination pushes to its own sync_queue*.db (push_client.db_path_for)
+#     so a "cloud" outage doesn't block or get blocked by "local" sync state.
+#
+# Changes vs v3.0:
+#   - Added python-dotenv dependency (requirements.txt); load_dotenv() runs
+#     first thing, before push_to_karbon_assure.load_configs() reads os.environ.
 #
 # Changes vs v2.0:
 #   - Data is APPENDED across restarts (no truncation) so the dashboard can
@@ -37,6 +52,14 @@ import struct
 import time
 from collections import deque
 from datetime import datetime, timezone
+
+from dotenv import load_dotenv
+
+# Load KARBON_ASSURE_* config from a local .env (gitignored, never committed —
+# see push_to_karbon_assure.py's load_config()) before anything reads os.environ.
+# Explicit path, not the default CWD-search, since App Lab may not launch
+# main.py with this directory as the working directory.
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 from arduino.app_utils import App, Bridge
 
@@ -121,17 +144,24 @@ _write_session_start(_ntp_info)
 
 
 # ── Karbon Assure cloud push (docs/plan/karbon-assure-ingestion-integration.md) ─
-# Config comes from env vars (KARBON_ASSURE_API_BASE_URL/PROJECT_ID/NODE_ID/
-# DEVICE_SECRET) set on the board, not hardcoded. Missing config disables
-# push entirely rather than crashing the read loop -- the board must keep
-# working fully offline (local JSONL logging is the durable source of
-# truth regardless of cloud-sync state).
+# Config comes from env vars (KARBON_ASSURE_LOCAL_*/KARBON_ASSURE_CLOUD_*,
+# see push_to_karbon_assure.py's docstring) set on the board, not hardcoded.
+# Pushes go to every configured destination simultaneously (local LAN demo
+# backend + live demo.karbon-assure.tech), each independently. Missing
+# config for a destination just skips it; missing config for ALL
+# destinations disables push entirely rather than crashing the read loop --
+# the board must keep working fully offline (local JSONL logging is the
+# durable source of truth regardless of cloud-sync state).
 try:
-    _push_config = push_client.load_config()
-    print("[Push] Karbon Assure config loaded — evidence/raw push enabled.", flush=True)
+    _push_configs = push_client.load_configs()
 except push_client.ConfigError as e:
-    _push_config = None
     print(f"[Push] WARN: {e} — evidence/raw push disabled, logging locally only.", flush=True)
+    _push_configs = {}
+
+if _push_configs:
+    print(f"[Push] Karbon Assure destinations enabled: {', '.join(_push_configs)}.", flush=True)
+else:
+    print("[Push] No Karbon Assure destinations configured — logging locally only.", flush=True)
 
 TEXTURE = "clay_loam"  # must match source/dashboard/real_source.py's TEXTURE
 TREND_WINDOW = 7  # must match source/dashboard/real_source.py's TREND_WINDOW
@@ -159,8 +189,9 @@ def _contributing_trend(rsmi_trend: float) -> str:
 def _push_evidence_if_ready(pot: str, rec: dict, sample_index: int):
     """Append rec to pot's rolling history; once there's a full trend
     window, compute rsmi/flag/confidence exactly like the dashboard's
-    RealDataSource does (same edge_node functions) and push it."""
-    if _push_config is None:
+    RealDataSource does (same edge_node functions) and push it to every
+    configured destination (local + cloud)."""
+    if not _push_configs:
         return
 
     history = _pot_history[pot]
@@ -185,9 +216,7 @@ def _push_evidence_if_ready(pot: str, rec: dict, sample_index: int):
     else:
         flag, confidence = "sensor_fault", validity.validity_score
 
-    record = {
-        "node_id": _push_config["node_id"],
-        "project_id": _push_config["project_id"],
+    base_record = {
         "pot_id": pot,
         "sample_index": sample_index,
         "timestamp": rec["received_at"],
@@ -204,11 +233,15 @@ def _push_evidence_if_ready(pot: str, rec: dict, sample_index: int):
             "light_lux": rec["light_lux"],
         },
     }
-    push_client.push_evidence(record, _push_config)
+    # node_id/project_id are per-destination -- each backend has its own
+    # device registration and its own base_projects.id UUID for this project.
+    for name, config in _push_configs.items():
+        record = {"node_id": config["node_id"], "project_id": config["project_id"], **base_record}
+        push_client.push_evidence(record, config, db_path=push_client.db_path_for(name))
 
 
 def _push_raw_if_batch_full(pot: str, rec: dict, sample_index: int):
-    if _push_config is None:
+    if not _push_configs:
         return
 
     buf = _raw_batch_buffer[pot]
@@ -227,10 +260,12 @@ def _push_raw_if_batch_full(pot: str, rec: dict, sample_index: int):
         return
 
     readings, _raw_batch_buffer[pot] = buf, []
-    push_client.push_raw_batch(
-        _push_config["node_id"], _push_config["project_id"], pot, readings,
-        _push_config, time_uncertain=not _ntp_info["ntp_synced"],
-    )
+    for name, config in _push_configs.items():
+        push_client.push_raw_batch(
+            config["node_id"], config["project_id"], pot, readings,
+            config, time_uncertain=not _ntp_info["ntp_synced"],
+            db_path=push_client.db_path_for(name),
+        )
 
 
 # ── Bridge handlers ────────────────────────────────────────────────────────────

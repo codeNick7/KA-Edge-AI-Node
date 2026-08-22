@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from push_to_karbon_assure import ConfigError, load_config, sign_request
+from push_to_karbon_assure import ConfigError, db_path_for, load_config, load_configs, sign_request
 
 _REQUIRED_ENV = {
     "KARBON_ASSURE_API_BASE_URL": "http://localhost:8001",
@@ -13,10 +13,24 @@ _REQUIRED_ENV = {
     "KARBON_ASSURE_DEVICE_SECRET": "test-secret-not-real",
 }
 
+_LOCAL_ENV = {
+    "KARBON_ASSURE_LOCAL_API_BASE_URL": "http://192.168.1.50:8001",
+    "KARBON_ASSURE_LOCAL_PROJECT_ID": "a166db20-2e3f-5cf4-880a-cac97eb58299",
+    "KARBON_ASSURE_LOCAL_NODE_ID": "edge-node-01",
+    "KARBON_ASSURE_LOCAL_DEVICE_SECRET": "local-secret-not-real",
+}
+
+_CLOUD_ENV = {
+    "KARBON_ASSURE_CLOUD_API_BASE_URL": "https://demo.karbon-assure.tech",
+    "KARBON_ASSURE_CLOUD_PROJECT_ID": "b277ec31-3f4g-6df5-991b-dbd08f69f3aa",
+    "KARBON_ASSURE_CLOUD_NODE_ID": "edge-node-01",
+    "KARBON_ASSURE_CLOUD_DEVICE_SECRET": "cloud-secret-not-real",
+}
+
 
 @pytest.fixture
 def clean_env(monkeypatch):
-    for key in _REQUIRED_ENV:
+    for key in {**_REQUIRED_ENV, **_LOCAL_ENV, **_CLOUD_ENV, "KARBON_ASSURE_DESTINATIONS": ""}:
         monkeypatch.delenv(key, raising=False)
     return monkeypatch
 
@@ -71,3 +85,51 @@ def test_sign_request_differs_for_different_secrets():
 def test_sign_request_differs_for_different_bodies():
     secret = "abc123"
     assert sign_request(b'{"flag": "stable"}', secret) != sign_request(b'{"flag": "moisture_low"}', secret)
+
+
+def test_load_configs_empty_when_nothing_set(clean_env):
+    assert load_configs() == {}
+
+
+def test_load_configs_loads_only_configured_destinations(clean_env):
+    for key, value in _LOCAL_ENV.items():
+        clean_env.setenv(key, value)
+    configs = load_configs()
+    assert set(configs) == {"local"}
+    assert configs["local"] == {
+        "api_base_url": "http://192.168.1.50:8001",
+        "project_id": "a166db20-2e3f-5cf4-880a-cac97eb58299",
+        "node_id": "edge-node-01",
+        "device_secret": "local-secret-not-real",
+    }
+
+
+def test_load_configs_loads_both_local_and_cloud_simultaneously(clean_env):
+    for env in (_LOCAL_ENV, _CLOUD_ENV):
+        for key, value in env.items():
+            clean_env.setenv(key, value)
+    configs = load_configs()
+    assert set(configs) == {"local", "cloud"}
+    assert configs["cloud"]["api_base_url"] == "https://demo.karbon-assure.tech"
+    assert configs["local"]["api_base_url"] == "http://192.168.1.50:8001"
+
+
+def test_load_configs_raises_on_partially_configured_destination(clean_env):
+    clean_env.setenv("KARBON_ASSURE_LOCAL_API_BASE_URL", "http://192.168.1.50:8001")
+    with pytest.raises(ConfigError, match="KARBON_ASSURE_LOCAL_PROJECT_ID"):
+        load_configs()
+
+
+def test_load_configs_respects_destinations_override(clean_env):
+    clean_env.setenv("KARBON_ASSURE_DESTINATIONS", "cloud")
+    for key, value in {**_LOCAL_ENV, **_CLOUD_ENV}.items():
+        clean_env.setenv(key, value)
+    assert set(load_configs()) == {"cloud"}
+
+
+def test_db_path_for_suffixes_each_destination_distinctly():
+    local_path = db_path_for("local", db_path="/data/sync_queue.db")
+    cloud_path = db_path_for("cloud", db_path="/data/sync_queue.db")
+    assert local_path == "/data/sync_queue_local.db"
+    assert cloud_path == "/data/sync_queue_cloud.db"
+    assert local_path != cloud_path
