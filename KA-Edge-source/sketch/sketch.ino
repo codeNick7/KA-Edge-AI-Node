@@ -1,13 +1,31 @@
-// v7.1 — dual-pot: BME688@0x76 + A1 (Pot A), BME688@0x77 + A0 (Pot B)
-// I²C bus: Wire1 (Qwiic connector) — confirmed by hardware diagnostic 2026-08-14.
+// v7.3 — fixed BH1750 init: both units were on the wrong I2C bus (Wire1/
+// Qwiic instead of the standard header Wire bus they're actually wired to
+// -- see wiring_schematic_v3, 2026-08-22), which is why both failed
+// begin() on real hardware. Also: write_log debug line now prints light
+// too, so real values are visible without checking the dashboard. And:
+// QUALITY_LOW -> QUALITY_HIGH2 (0.5 lx vs ~4 lx resolution) -- LOW was
+// coarse enough to visibly quantize into a binary on/off toggle at the
+// low light levels this gallery setup actually sees; still comfortably
+// within the 1 Hz loop budget.
+//
+// Changes vs v7.2: BH1750 light sensors physically wired (both pots) and
+// read for real.
+// I²C buses: BME688 pair on Wire1 (Qwiic connector, confirmed by hardware
+// diagnostic 2026-08-14); BH1750 pair on the standard header Wire bus (a
+// separate, physically different bus -- see BH1750 declaration comment).
 // Soil pins CORRECTED 2026-08-15: the 2026-08-14 "confirmed by physical
 // watering test" mapping (Pot A -> A0, Pot B -> A1) was backwards — traced
 // again and found Pot A's probe is actually on A1, Pot B's (withering) is
 // actually on A0. Was wrong from the very start of data collection; see
 // scripts/migrate_soil_pin_swap.py for the historical-data fix this forced.
-// BH1750 light sensor: placeholder fields (0.00) until physically wired.
-//   TODO BH1750: when wired, add #include <hp_BH1750.h>, call begin() in doInit(),
-//   replace LIGHT_PLACEHOLDER with real lux readings. Supply I2C address per pot.
+//
+// Changes vs v7.1:
+//   - BH1750 wired: Pot A's ADDR pin to GND (address 0x23, the library's
+//     BH1750_TO_GROUND default), Pot B's ADDR pin to VCC (address 0x5C,
+//     BH1750_TO_VCC) -- same dual-address-on-one-bus strategy the two
+//     BME688s already use (0x76/0x77). LIGHT_PLACEHOLDER is gone; lightA/B
+//     fields are real lux readings now.
+//
 // CSV header:
 //   #,millis_ms,tempA_C,humA_pct,pressA_hPa,gasA_KOhm,
 //   tempB_C,humB_pct,pressB_hPa,gasB_KOhm,
@@ -17,6 +35,7 @@
 #include <Wire.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME680.h>
+#include <hp_BH1750.h>
 #include <Arduino_RouterBridge.h>
 
 const int chipSelect = 10;
@@ -55,11 +74,29 @@ float soilPct(int pin) {
   return pct;
 }
 
-// ── BH1750 — not yet wired; placeholder until physically connected ──
-// Both lightA_lux and lightB_lux are emitted as 0.00.
-// When the sensor is wired, add #include <hp_BH1750.h>, initialise here,
-// and replace the 0.0f literals in buildReadingLine / appendReadingToSD.
-const float LIGHT_PLACEHOLDER = 0.0f;
+// ── BH1750 — Pot A @0x23 (ADDR->GND), Pot B @0x5C (ADDR->VCC) ──
+// On the standard header SDA/SCL pins (the default Wire bus), NOT the
+// Qwiic connector (Wire1) the two BME688s are on -- these are two
+// physically separate I2C buses on the UNO Q. See wiring_schematic_v3
+// (2026-08-22): BH1750 SDA/SCL tap into the "header pins (Wire bus)"
+// rail, not the Qwiic daisy chain.
+// Non-blocking pipelined read (see doStreamOneReading): start() queues a
+// measurement, hasValue() checks (cheaply, no bus traffic) whether it's
+// ready, getLux() retrieves it. QUALITY_HIGH2 (0.5 lx resolution, ~120-180ms
+// conversion -- upgraded 2026-08-22 from QUALITY_LOW's ~4 lx resolution,
+// which was coarse enough to visibly quantize into a binary on/off toggle
+// at the very low light levels this gallery setup actually sees) still
+// comfortably finishes within the 1 Hz loop cadence, so hasValue() is
+// essentially always true by the next cycle; lastLuxA/B carry the most
+// recent reading forward on the rare cycle it isn't, rather than emitting
+// a false zero.
+hp_BH1750 lightA;
+bool lightAReady = false;
+float lastLuxA = 0.0f;
+
+hp_BH1750 lightB;
+bool lightBReady = false;
+float lastLuxB = 0.0f;
 
 // ── Report / reading message queues ──────────────────────────────────────
 #define MAX_REPORT_LINES 40
@@ -128,7 +165,7 @@ void buildReadingLine(char *out, size_t outLen,
            index, millis(),
            tA, hA, pA, gA,
            tB, hB, pB, gB,
-           LIGHT_PLACEHOLDER, LIGHT_PLACEHOLDER,
+           lastLuxA, lastLuxB,
            moistA, moistB);
 }
 
@@ -156,8 +193,8 @@ bool appendReadingToSD(int index, float moistA, float moistB) {
   dataFile.print(hB, 2);       dataFile.print(",");
   dataFile.print(pB, 2);       dataFile.print(",");
   dataFile.print(gB, 2);       dataFile.print(",");
-  dataFile.print(LIGHT_PLACEHOLDER, 2); dataFile.print(",");
-  dataFile.print(LIGHT_PLACEHOLDER, 2); dataFile.print(",");
+  dataFile.print(lastLuxA, 2); dataFile.print(",");
+  dataFile.print(lastLuxB, 2); dataFile.print(",");
   dataFile.print(moistA, 2);   dataFile.print(",");
   dataFile.println(moistB, 2);
   dataFile.close();
@@ -214,8 +251,23 @@ void doInit() {
     bmeB.setGasHeater(320, 150);
   }
 
-  // BH1750 placeholder — log intent clearly for future wiring
-  report("BH1750: not wired yet — light fields emitted as 0.00 (placeholder)");
+  // BH1750s are on the standard header Wire bus, not Wire1/Qwiic (see
+  // their declaration comment) -- that bus needs its own explicit begin(),
+  // unlike Wire1 which the board's core/Bridge framework already brings up
+  // for the Qwiic BME688 chain.
+  Wire.begin();
+
+  // BH1750 Pot A — 0x23 (ADDR pin -> GND)
+  lightAReady = lightA.begin(BH1750_TO_GROUND, &Wire);
+  snprintf(msg, sizeof(msg), "lightA (0x23): %s", lightAReady ? "OK" : "FAILED");
+  report(msg);
+  if (lightAReady) lightA.start(BH1750_QUALITY_HIGH2, BH1750_MTREG_DEFAULT);
+
+  // BH1750 Pot B — 0x5C (ADDR pin -> VCC)
+  lightBReady = lightB.begin(BH1750_TO_VCC, &Wire);
+  snprintf(msg, sizeof(msg), "lightB (0x5C): %s", lightBReady ? "OK" : "FAILED");
+  report(msg);
+  if (lightBReady) lightB.start(BH1750_QUALITY_HIGH2, BH1750_MTREG_DEFAULT);
 
   // Soil sensors — initial ADC diagnostic readings
   int rawA = analogRead(SOIL_PIN_A);
@@ -253,6 +305,19 @@ void doInit() {
 // Called every loop iteration in STATE_STREAMING; the outer loop has a
 // 1000 ms delay so this fires ~once per second.
 void doStreamOneReading() {
+  // BH1750 — pick up whatever measurement finished since the last start()
+  // call, then immediately queue the next one (see lightA/lightB's
+  // declaration comment for why this pipelined pattern instead of a
+  // blocking start()+getLux() every cycle).
+  if (lightAReady && lightA.hasValue()) {
+    lastLuxA = lightA.getLux();
+    lightA.start(BH1750_QUALITY_HIGH2, BH1750_MTREG_DEFAULT);
+  }
+  if (lightBReady && lightB.hasValue()) {
+    lastLuxB = lightB.getLux();
+    lightB.start(BH1750_QUALITY_HIGH2, BH1750_MTREG_DEFAULT);
+  }
+
   // Perform BME readings — skip individual sensor if it failed init or
   // if performReading() times out this cycle. Zero-filled fields are clearly
   // labelled in the CSV header; the Python side can detect offline sensors.
@@ -299,12 +364,12 @@ void doStreamOneReading() {
                String(bmeA.humidity, 1) + "% " +
                String(bmeA.pressure / 100.0, 0) + "hPa " +
                String(bmeA.gas_resistance / 1000.0, 1) + "kΩ soil:" +
-               String(moistA, 1) + "%] | B[" +
+               String(moistA, 1) + "% light:" + String(lastLuxA, 1) + "lx] | B[" +
                String(bmeB.temperature, 1) + "C " +
                String(bmeB.humidity, 1) + "% " +
                String(bmeB.pressure / 100.0, 0) + "hPa " +
                String(bmeB.gas_resistance / 1000.0, 1) + "kΩ soil:" +
-               String(moistB, 1) + "%] SD:" + (cardReady ? "OK" : "FAIL");
+               String(moistB, 1) + "% light:" + String(lastLuxB, 1) + "lx] SD:" + (cardReady ? "OK" : "FAIL");
   Bridge.notify("write_log", dbg.c_str());
 }
 

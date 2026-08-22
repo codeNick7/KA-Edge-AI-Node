@@ -1,6 +1,10 @@
-# v3.2 — push evidence/raw readings to multiple Karbon Assure destinations
-# simultaneously (local LAN demo backend + live demo.karbon-assure.tech),
-# each with its own device/secret and its own independent sync queue.
+# v3.3 — [Reading #] console line now also prints light_lux, so real BH1750
+# values are visible without checking the dashboard.
+#
+# Changes vs v3.2: push evidence/raw readings to multiple Karbon Assure
+# destinations simultaneously (local LAN demo backend + live
+# demo.karbon-assure.tech), each with its own device/secret and its own
+# independent sync queue.
 #
 # Changes vs v3.1:
 #   - push_client.load_config() -> load_configs(): reads KARBON_ASSURE_LOCAL_*
@@ -381,8 +385,10 @@ def handle_reading(msg):
 
     print(
         f"[Reading #{sample_index}] "
-        f"A: temp={rec_a['temp_c']}C hum={rec_a['humidity_pct']}% soil={rec_a['moisture_pct']}% | "
-        f"B: temp={rec_b['temp_c']}C hum={rec_b['humidity_pct']}% soil={rec_b['moisture_pct']}%"
+        f"A: temp={rec_a['temp_c']}C hum={rec_a['humidity_pct']}% soil={rec_a['moisture_pct']}% "
+        f"light={rec_a['light_lux']}lx | "
+        f"B: temp={rec_b['temp_c']}C hum={rec_b['humidity_pct']}% soil={rec_b['moisture_pct']}% "
+        f"light={rec_b['light_lux']}lx"
     )
 
 
