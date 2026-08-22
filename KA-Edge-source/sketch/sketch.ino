@@ -1,12 +1,19 @@
-// v7.3 — fixed BH1750 init: both units were on the wrong I2C bus (Wire1/
-// Qwiic instead of the standard header Wire bus they're actually wired to
-// -- see wiring_schematic_v3, 2026-08-22), which is why both failed
-// begin() on real hardware. Also: write_log debug line now prints light
-// too, so real values are visible without checking the dashboard. And:
-// QUALITY_LOW -> QUALITY_HIGH2 (0.5 lx vs ~4 lx resolution) -- LOW was
-// coarse enough to visibly quantize into a binary on/off toggle at the
-// low light levels this gallery setup actually sees; still comfortably
-// within the 1 Hz loop budget.
+// v7.4 — BH1750 Pot A/Pot B were swapped: the ADDR->GND unit (0x23) was
+// coded as Pot A but is physically mounted at Pot B (the withering pot),
+// confirmed by physical inspection 2026-08-22. Same bug class as the
+// 2026-08-15 soil-pin swap below -- physical placement doesn't follow
+// address/wiring-order assumptions, verify it directly. lightA is now
+// 0x5C, lightB is now 0x23.
+//
+// Changes vs v7.3: fixed BH1750 init: both units were on the wrong I2C bus
+// (Wire1/Qwiic instead of the standard header Wire bus they're actually
+// wired to -- see wiring_schematic_v3, 2026-08-22), which is why both
+// failed begin() on real hardware. Also: write_log debug line now prints
+// light too, so real values are visible without checking the dashboard.
+// And: QUALITY_LOW -> QUALITY_HIGH2 (0.5 lx vs ~4 lx resolution) -- LOW
+// was coarse enough to visibly quantize into a binary on/off toggle at
+// the low light levels this gallery setup actually sees; still
+// comfortably within the 1 Hz loop budget.
 //
 // Changes vs v7.2: BH1750 light sensors physically wired (both pots) and
 // read for real.
@@ -74,7 +81,13 @@ float soilPct(int pin) {
   return pct;
 }
 
-// ── BH1750 — Pot A @0x23 (ADDR->GND), Pot B @0x5C (ADDR->VCC) ──
+// ── BH1750 — Pot A @0x5C (ADDR->VCC), Pot B @0x23 (ADDR->GND) ──
+// Confirmed by physical inspection 2026-08-22: the ADDR-open/GND (0x23)
+// unit is the one actually mounted at Pot B (the withering pot), not Pot A
+// -- opposite of the BME688 numbering assumption this was first coded
+// against. Same bug class as the 2026-08-15 soil-pin swap (see file
+// header) -- physical pot placement doesn't follow address numbering,
+// verify it directly rather than assuming.
 // On the standard header SDA/SCL pins (the default Wire bus), NOT the
 // Qwiic connector (Wire1) the two BME688s are on -- these are two
 // physically separate I2C buses on the UNO Q. See wiring_schematic_v3
@@ -257,15 +270,15 @@ void doInit() {
   // for the Qwiic BME688 chain.
   Wire.begin();
 
-  // BH1750 Pot A — 0x23 (ADDR pin -> GND)
-  lightAReady = lightA.begin(BH1750_TO_GROUND, &Wire);
-  snprintf(msg, sizeof(msg), "lightA (0x23): %s", lightAReady ? "OK" : "FAILED");
+  // BH1750 Pot A — 0x5C (ADDR pin -> VCC)
+  lightAReady = lightA.begin(BH1750_TO_VCC, &Wire);
+  snprintf(msg, sizeof(msg), "lightA (0x5C): %s", lightAReady ? "OK" : "FAILED");
   report(msg);
   if (lightAReady) lightA.start(BH1750_QUALITY_HIGH2, BH1750_MTREG_DEFAULT);
 
-  // BH1750 Pot B — 0x5C (ADDR pin -> VCC)
-  lightBReady = lightB.begin(BH1750_TO_VCC, &Wire);
-  snprintf(msg, sizeof(msg), "lightB (0x5C): %s", lightBReady ? "OK" : "FAILED");
+  // BH1750 Pot B — 0x23 (ADDR pin -> GND)
+  lightBReady = lightB.begin(BH1750_TO_GROUND, &Wire);
+  snprintf(msg, sizeof(msg), "lightB (0x23): %s", lightBReady ? "OK" : "FAILED");
   report(msg);
   if (lightBReady) lightB.start(BH1750_QUALITY_HIGH2, BH1750_MTREG_DEFAULT);
 
