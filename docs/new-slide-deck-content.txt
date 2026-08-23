@@ -293,17 +293,54 @@ This slide is for technical judges.
 
 ⸻
 
-Slide 16 – Practical Benefits
+Slide 16 – Practical Benefits: Evidence, Not Raw Telemetry
 
-Lower bandwidth
+Key goal: every node sends decisions, not measurements
 
-Faster response
+Current dMRV today typically relies on one of:
 
-Offline capability
+* Manual field visits + paper/photo records — slow, infrequent (often
+  quarterly/annual), expensive to scale
+* Satellite/remote-sensing imagery — good for canopy-level trends, but
+  cannot see soil moisture or local microclimate, and has cloud-cover gaps
+* IoT sensors streaming raw telemetry to the cloud for centralized
+  processing — where connectivity allows; expensive/unreliable in the
+  remote, rural terrain most carbon/conservation projects actually sit in
 
-Explainable AI
+Karbon-Assure Edge Node moves the "what does this mean" decision onto the
+node itself, so the network only ever carries the answer.
 
-Scalable architecture
+The honest bandwidth story (real numbers, this project's actual payloads
+— not estimates, and a realistic comparison, not a strawman):
+
+* Raw JSONL reading: 223 bytes. Evidence record: 430 bytes — evidence is
+  BIGGER per message (it carries node/project IDs, model version, schema
+  version alongside the feature subset). The win is not message size.
+* The win is frequency, and WHETHER to send at all. Compare a realistic
+  "smart" raw-telemetry design — sample every 1 minute, sync twice a day
+  — against evidence sent once a day, only when the on-device AI decides
+  the trend is actually worth reporting:
+
+  | Approach                                          | Data volume     |
+  |----------------------------------------------------|------------------|
+  | Raw, sampled every 1 min, synced 2x/day             | 19.3 MB/month    |
+  | Evidence, 1/day (only if the AI decides to send it) | 26 KB/month      |
+
+  ~750x less data, for the SAME two daily connectivity windows — because
+  the node already decided what mattered; it doesn't need to hand every
+  raw sample to the cloud and ask it to figure that out.
+* Each raw-telemetry sync session still moves ~314 KB per pot pair over
+  the connection; an evidence-only design's entire DAILY payload (860
+  bytes) is smaller than a single raw sync session by three orders of
+  magnitude — comfortably inside even the cheapest metered 3G/4G IoT SIM.
+* This isn't a projection — this project's own historical backfill
+  (backfill_historical_evidence.py) demonstrates it directly: 8+ days of
+  1 Hz sensor history (700k+ raw readings/pot) compressed into one
+  evidence record per day, still carrying the full moisture trend.
+
+Faster response · Offline capability (local JSONL/SD is the durable
+source of truth regardless of connectivity — see sync_queue.py) ·
+Explainable AI (decision tree, not a black box) · Scalable architecture
 
 ⸻
 

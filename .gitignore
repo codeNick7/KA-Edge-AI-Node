@@ -5,3 +5,18 @@ __pycache__/
 .DS_Store
 .env
 mock-data/
+
+# Raw sensor data dumps / exports -- not source, regenerable from hardware
+data-from-board/
+*.jsonl
+*.jsonl.*.bak
+sync_queue*.db
+*.sqlite3
+one-hour-sensor-readings.txt
+ka_edge_pot_all_readings*.csv
+test.csv
+
+# One-off / scratch scripts and assets -- not part of the submission
+Moon-habitat-contest-image.png
+KA-Edge-source/python/backfill_historical_evidence.py
+source/tests/
