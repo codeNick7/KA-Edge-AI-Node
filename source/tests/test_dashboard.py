@@ -1,11 +1,16 @@
 """Integration tests for the Flask dashboard routes.
 
-Both pots are now served by RealDataSource (real sensor JSONL files).
+Both pots are now served by RealDataSource, backed by board_db's SQLite
+schema (2026-09-16 migration, see docs/plan/sqlite-storage-migration.md).
 MockDataSource is still tested in isolation for its own correctness.
 """
 
-import json
+import os
+import sys
 from datetime import datetime, timedelta, timezone
+
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "KA-Edge-source", "python"))
+import board_db  # noqa: E402
 
 import dashboard.app as dashboard_app
 from dashboard.app import app
@@ -21,31 +26,30 @@ def client():
     return app.test_client()
 
 
-def _write_fixture(path, n=15, pot_id="A"):
-    """Write n v6.0 JSONL records to path.
-
-    received_at uses real datetime arithmetic so it stays valid for n > 59
-    -- see test_real_source.py's identical fixture for the full rationale.
-    """
-    base_temp = {"A": 24.0, "B": 28.0}[pot_id]
-    with open(path, "w") as f:
+def _seed_readings(db_path, pot, n=15, start_ts=None):
+    base_temp = {"A": 24.0, "B": 28.0}[pot]
+    start = start_ts or _FIXTURE_EPOCH
+    with board_db.connect(db_path) as conn:
         for i in range(1, n + 1):
-            f.write(
-                json.dumps(
-                    {
-                        "sample_index": i,
-                        "millis_ms": i * 1000,
-                        "temp_c": round(base_temp + i * 0.1, 1),
-                        "humidity_pct": 55.0,
-                        "pressure_hpa": 1013.0,
-                        "gas_kohm": 10.0 + i,
-                        "light_lux": 0.0,     # BH1750 placeholder
-                        "moisture_pct": 2.0,
-                        "received_at": (_FIXTURE_EPOCH + timedelta(seconds=i)).isoformat(),
-                    }
-                )
-                + "\n"
-            )
+            board_db.insert_reading(conn, pot, {
+                "sample_index": i, "millis_ms": i * 1000,
+                "temp_c": round(base_temp + i * 0.1, 1),
+                "humidity_pct": 55.0, "pressure_hpa": 1013.0,
+                "gas_kohm": 10.0 + i, "light_lux": 0.0, "moisture_pct": 2.0,
+                "received_at": (start + timedelta(seconds=i)).isoformat(),
+            })
+
+
+def _seed_inference(db_path, pot, n=15, start_ts=None):
+    start = start_ts or _FIXTURE_EPOCH
+    with board_db.connect(db_path) as conn:
+        for i in range(1, n + 1):
+            board_db.insert_inference_result(conn, pot, None, {
+                "timestamp": (start + timedelta(seconds=i)).isoformat(),
+                "rsmi": 0.5, "light_delta": 0.0, "gas_index_trend": 0.0, "rsmi_trend": 0.0,
+                "flag": "stable", "confidence": 0.9, "contributing_trend": "moisture_flat",
+                "model_version": MODEL_VERSION,
+            })
 
 
 def test_html_routes_return_200():
@@ -57,16 +61,11 @@ def test_html_routes_return_200():
 
 
 def test_api_raw_both_pots_return_n_rows(tmp_path, monkeypatch):
-    """Both pots must be served from RealDataSource JSONL relay files."""
-    pot_a = tmp_path / "pot_a.jsonl"
-    pot_b = tmp_path / "pot_b.jsonl"
-    _write_fixture(pot_a, n=15, pot_id="A")
-    _write_fixture(pot_b, n=15, pot_id="B")
-    monkeypatch.setattr(
-        dashboard_app,
-        "_real_source",
-        RealDataSource(pot_a_path=str(pot_a), pot_b_path=str(pot_b)),
-    )
+    """Both pots must be served from RealDataSource's board_db table."""
+    db_path = str(tmp_path / "sensor_data.db")
+    _seed_readings(db_path, "A", n=15)
+    _seed_readings(db_path, "B", n=15)
+    monkeypatch.setattr(dashboard_app, "_real_source", RealDataSource(db_path=db_path))
 
     c = client()
     for pot in ("A", "B"):
@@ -78,27 +77,23 @@ def test_api_raw_both_pots_return_n_rows(tmp_path, monkeypatch):
                       "light_lux", "humidity_pct", "pressure_hpa"):
             assert field in rows[0], f"missing {field!r} in Pot {pot} raw row"
         # light_lux is placeholder (0.0 from fixture); PLACEHOLDER_LIGHT_LUX
-        # fallback only kicks in when the key is entirely absent
+        # only kicks in when the key is entirely absent at insert time.
         assert rows[0]["light_lux"] == 0.0
 
 
 def test_api_raw_light_lux_fallback_when_key_absent(tmp_path, monkeypatch):
-    """Records missing light_lux key should fall back to PLACEHOLDER_LIGHT_LUX."""
-    pot_a = tmp_path / "pot_a.jsonl"
-    pot_b = tmp_path / "pot_b.jsonl"
-    with open(pot_a, "w") as f:
-        f.write(json.dumps({
+    """A reading inserted without a light_lux key falls back to
+    PLACEHOLDER_LIGHT_LUX (board_db.insert_reading's own default)."""
+    db_path = str(tmp_path / "sensor_data.db")
+    with board_db.connect(db_path) as conn:
+        board_db.insert_reading(conn, "A", {
             "sample_index": 1, "millis_ms": 1000,
             "temp_c": 24.0, "humidity_pct": 55.0, "pressure_hpa": 1013.0,
             "gas_kohm": 11.0, "moisture_pct": 2.0,
             "received_at": "2026-08-13T10:00:01+00:00",
-        }) + "\n")
-    open(pot_b, "w").close()
-    monkeypatch.setattr(
-        dashboard_app,
-        "_real_source",
-        RealDataSource(pot_a_path=str(pot_a), pot_b_path=str(pot_b)),
-    )
+            # light_lux omitted entirely
+        })
+    monkeypatch.setattr(dashboard_app, "_real_source", RealDataSource(db_path=db_path))
 
     c = client()
     resp = c.get("/api/raw?pot=A&n=1")
@@ -107,16 +102,13 @@ def test_api_raw_light_lux_fallback_when_key_absent(tmp_path, monkeypatch):
 
 
 def test_api_inference_both_pots_return_rows(tmp_path, monkeypatch):
-    """Inference pipeline must work for both pots."""
-    pot_a = tmp_path / "pot_a.jsonl"
-    pot_b = tmp_path / "pot_b.jsonl"
-    _write_fixture(pot_a, n=15, pot_id="A")
-    _write_fixture(pot_b, n=15, pot_id="B")
-    monkeypatch.setattr(
-        dashboard_app,
-        "_real_source",
-        RealDataSource(pot_a_path=str(pot_a), pot_b_path=str(pot_b)),
-    )
+    """Inference route must work for both pots, reading inference_results."""
+    db_path = str(tmp_path / "sensor_data.db")
+    _seed_readings(db_path, "A", n=15)
+    _seed_readings(db_path, "B", n=15)
+    _seed_inference(db_path, "A", n=15)
+    _seed_inference(db_path, "B", n=15)
+    monkeypatch.setattr(dashboard_app, "_real_source", RealDataSource(db_path=db_path))
 
     c = client()
     for pot in ("A", "B"):
@@ -131,19 +123,14 @@ def test_api_inference_both_pots_return_rows(tmp_path, monkeypatch):
 
 
 def test_api_status_reports_sd_card_space(tmp_path, monkeypatch):
-    pot_a = tmp_path / "pot_a.jsonl"
-    pot_b = tmp_path / "pot_b.jsonl"
-    open(pot_a, "w").close()
-    open(pot_b, "w").close()
+    db_path = str(tmp_path / "sensor_data.db")
     sd_status = tmp_path / "sd_status.json"
-    sd_status.write_text(json.dumps({
-        "sd_used_mb": 12.4, "sd_free_mb": 1987.6, "sd_total_mb": 2000.0,
-        "updated_at": "2026-08-15T09:00:00+00:00",
-    }))
+    sd_status.write_text(
+        '{"sd_used_mb": 12.4, "sd_free_mb": 1987.6, "sd_total_mb": 2000.0, '
+        '"updated_at": "2026-08-15T09:00:00+00:00"}'
+    )
     monkeypatch.setattr(
-        dashboard_app,
-        "_real_source",
-        RealDataSource(pot_a_path=str(pot_a), pot_b_path=str(pot_b), sd_status_path=str(sd_status)),
+        dashboard_app, "_real_source", RealDataSource(db_path=db_path, sd_status_path=str(sd_status)),
     )
 
     c = client()
@@ -157,16 +144,10 @@ def test_api_status_reports_sd_card_space(tmp_path, monkeypatch):
 
 def test_api_download_csv_streams_full_history_for_one_pot(tmp_path, monkeypatch):
     """CSV export (2026-08-22 streaming rewrite) must still return every row,
-    byte-for-byte the same shape as before, just produced via a generator."""
-    pot_a = tmp_path / "pot_a.jsonl"
-    pot_b = tmp_path / "pot_b.jsonl"
-    _write_fixture(pot_a, n=15, pot_id="A")
-    open(pot_b, "w").close()
-    monkeypatch.setattr(
-        dashboard_app,
-        "_real_source",
-        RealDataSource(pot_a_path=str(pot_a), pot_b_path=str(pot_b)),
-    )
+    byte-for-byte the same shape as before, just sourced from SQL now."""
+    db_path = str(tmp_path / "sensor_data.db")
+    _seed_readings(db_path, "A", n=15)
+    monkeypatch.setattr(dashboard_app, "_real_source", RealDataSource(db_path=db_path))
 
     c = client()
     resp = c.get("/api/download/csv?pot=A")
@@ -180,15 +161,10 @@ def test_api_download_csv_streams_full_history_for_one_pot(tmp_path, monkeypatch
 
 
 def test_api_download_csv_omit_pot_exports_both(tmp_path, monkeypatch):
-    pot_a = tmp_path / "pot_a.jsonl"
-    pot_b = tmp_path / "pot_b.jsonl"
-    _write_fixture(pot_a, n=5, pot_id="A")
-    _write_fixture(pot_b, n=3, pot_id="B")
-    monkeypatch.setattr(
-        dashboard_app,
-        "_real_source",
-        RealDataSource(pot_a_path=str(pot_a), pot_b_path=str(pot_b)),
-    )
+    db_path = str(tmp_path / "sensor_data.db")
+    _seed_readings(db_path, "A", n=5)
+    _seed_readings(db_path, "B", n=3)
+    monkeypatch.setattr(dashboard_app, "_real_source", RealDataSource(db_path=db_path))
 
     c = client()
     resp = c.get("/api/download/csv")
@@ -200,15 +176,9 @@ def test_api_download_csv_omit_pot_exports_both(tmp_path, monkeypatch):
 def test_api_raw_range_scoped_chart_fetch(tmp_path, monkeypatch):
     """range=overall&max_points=... (dashboard.js's actual fetch shape) must
     work end-to-end through the HTTP layer, not just the Python API."""
-    pot_a = tmp_path / "pot_a.jsonl"
-    pot_b = tmp_path / "pot_b.jsonl"
-    _write_fixture(pot_a, n=500, pot_id="A")
-    open(pot_b, "w").close()
-    monkeypatch.setattr(
-        dashboard_app,
-        "_real_source",
-        RealDataSource(pot_a_path=str(pot_a), pot_b_path=str(pot_b)),
-    )
+    db_path = str(tmp_path / "sensor_data.db")
+    _seed_readings(db_path, "A", n=500)
+    monkeypatch.setattr(dashboard_app, "_real_source", RealDataSource(db_path=db_path))
 
     c = client()
     resp = c.get("/api/raw?pot=A&n=0&range=overall&max_points=50")
