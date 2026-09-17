@@ -44,6 +44,7 @@ echo "== Copying board-side Python (main.py + friends, no .env) to ${BOARD}:${DE
 ssh "${BOARD}" "mkdir -p '${DEST}/python' '${DEST}/sketch'"
 scp \
   "${PY_DIR}/main.py" \
+  "${PY_DIR}/board_db.py" \
   "${PY_DIR}/push_to_karbon_assure.py" \
   "${PY_DIR}/sync_queue.py" \
   "${PY_DIR}/requirements.txt" \
