@@ -13,6 +13,27 @@ KA.N_LIVE      = 60;     // points fetched on each live tick (tail only)
 KA.CHART_MAX_POINTS = 1500; // decimation cap for range-scoped chart fetches (n=0)
 KA.currentFilter = "overall"; // "5m" | "15m" | "1h" | "today" | "week" | "overall"
 
+// Cap on how many {timestamp: value} entries _mergeByTimestamp lets a client-
+// side series buffer grow to before trimming the oldest. Without this, a tab
+// left open accumulates one entry per live-tick row FOREVER (liveTick runs
+// every REFRESH_MS indefinitely, and init*Page only runs once per page
+// load) -- at ~1 reading/sec that's tens of thousands of entries after a few
+// hours, each re-sorted + re-date-parsed from scratch on every 5s render
+// (_sortedSeries/_filterDataset), so both memory AND per-tick CPU cost grow
+// with uptime, not with anything bounded. 2026-08-30: confirmed as the cause
+// of "dashboard slows down / pegs CPU after being left running a while" and
+// "filters stop responding" (a filter click just queues behind an
+// increasingly slow render on the single JS thread). Generous enough to
+// comfortably hold a "week" filter's worth of ~1Hz readings.
+KA.MAX_BUFFERED_POINTS = 8000;
+
+// Re-sync (not just merge-append) the active filter's buffer from the
+// server's already-scoped+decimated endpoint on this cadence, independent of
+// filter-button clicks -- keeps "today"/"week"/"overall" reflecting what the
+// server considers correct for that range over a long-running session,
+// instead of slowly narrowing to whatever the trimmed buffer still holds.
+KA.RESYNC_EVERY_N_TICKS = 12; // 12 * REFRESH_MS = 60s
+
 
 // Sensor definitions — shown as raw-value cards + trend charts
 // key must match the field names returned by /api/raw
@@ -151,13 +172,24 @@ KA.refreshStatus = function () {
         "<span>· 💾 SD: <strong>" + fmtMB(s.sd_used_mb) + " / " + fmtMB(s.sd_total_mb) +
         "</strong> (" + pctUsed.toFixed(0) + "% used)</span>";
     }
+    // Board's own disk (distinct from the sdSpan above, which is the MCU's physical
+    // SD card) -- see docs/plan/board-disk-backup-routine.md. Only rendered once
+    // main.py has reported it at least once (board_disk_free_mb non-null).
+    var diskSpan = "";
+    if (s.board_disk_free_mb !== null && s.board_disk_free_mb !== undefined) {
+      var diskClass = s.board_disk_low ? " ka-disk-low" : "";
+      var diskLabel = s.board_disk_low
+        ? "⚠️ Board disk low: <strong>" + fmtMB(s.board_disk_free_mb) + " free</strong> — run the backup/rotation routine"
+        : "🗄️ Board disk: <strong>" + fmtMB(s.board_disk_free_mb) + " free</strong>";
+      diskSpan = "<span class=\"" + diskClass.trim() + "\">· " + diskLabel + "</span>";
+    }
     el.innerHTML =
       "<span>📅 Collecting since: <strong>" + fmtTs(s.collecting_since) + "</strong></span>" +
       "<span>· A: <strong>" + s.total_readings_a + "</strong> readings</span>" +
       "<span>· B: <strong>" + s.total_readings_b + "</strong> readings</span>" +
       "<span>· " + ntp + offset + "</span>" +
       "<span>· Last: " + fmtTs(s.last_reading_at) + "</span>" +
-      sdSpan;
+      sdSpan + diskSpan;
   }).catch(function () {});
 };
 
@@ -209,6 +241,22 @@ function _mergeByTimestamp(byTs, rows, valueKey) {
     if (r.timestamp == null) return;
     byTs[r.timestamp] = r[valueKey];
   });
+  _trimByTs(byTs);
+}
+
+// Keep byTs bounded to KA.MAX_BUFFERED_POINTS, dropping the oldest
+// (lexicographically smallest ISO timestamp) entries first -- see
+// KA.MAX_BUFFERED_POINTS for why this is necessary. No-op (cheap key-count
+// check only) when already under the cap, which is true on every tick until
+// a session has genuinely been running long enough to matter.
+function _trimByTs(byTs) {
+  var keys = Object.keys(byTs);
+  if (keys.length <= KA.MAX_BUFFERED_POINTS) return;
+  keys.sort();
+  var excess = keys.length - KA.MAX_BUFFERED_POINTS;
+  for (var i = 0; i < excess; i++) {
+    delete byTs[keys[i]];
+  }
 }
 
 function _sortedSeries(byTs) {
@@ -338,8 +386,18 @@ KA.initRawPage = function (pots) {
   KA.refreshStatus();
   loadFilterScopedData();
 
+  var _tickCount = 0;
+
   function liveTick() {
     KA.refreshStatus();
+    _tickCount++;
+    // Periodically re-sync the active filter's buffer from the server's
+    // scoped+decimated view instead of relying purely on indefinite
+    // merge-append -- see KA.RESYNC_EVERY_N_TICKS.
+    if (_tickCount % KA.RESYNC_EVERY_N_TICKS === 0) {
+      loadFilterScopedData();
+      return;
+    }
     pots.forEach(function (pot) {
       fetchJson("/api/raw?pot=" + pot + "&n=" + KA.N_LIVE)
         .then(function (rows) {
@@ -441,8 +499,18 @@ KA.initInferencePage = function (pots) {
   // Load data scoped to the current (default "overall") filter on page load.
   loadFilterScopedData();
 
+  var _tickCount = 0;
+
   // Live polling: append new points and advance rolling window
   function liveTick() {
+    _tickCount++;
+    // Periodically re-sync the active filter's buffer from the server's
+    // scoped+decimated view instead of relying purely on indefinite
+    // merge-append -- see KA.RESYNC_EVERY_N_TICKS.
+    if (_tickCount % KA.RESYNC_EVERY_N_TICKS === 0) {
+      loadFilterScopedData();
+      return;
+    }
     pots.forEach(function (pot) {
       fetchJson("/api/inference?pot=" + pot + "&n=" + KA.N_LIVE)
         .then(function (rows) {

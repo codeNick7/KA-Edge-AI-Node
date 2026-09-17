@@ -310,6 +310,8 @@ body {
   margin-bottom: 1.25rem;
 }
 .ka-status-bar strong { color: var(--foreground); }
+.ka-status-bar .ka-disk-low { color: var(--destructive); font-weight: 600; }
+.ka-status-bar .ka-disk-low strong { color: var(--destructive); }
 
 /* ── Per-pot download button ─────────────────────────────────────────── */
 .ka-pot-actions {
