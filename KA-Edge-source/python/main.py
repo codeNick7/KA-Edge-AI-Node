@@ -51,7 +51,9 @@
 #   Pot B: BME688 @0x77, soil A0, Wire1 (Qwiic)
 import json
 import os
+import shutil
 import socket
+import sqlite3
 import struct
 import time
 from collections import deque
@@ -67,6 +69,7 @@ load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 from arduino.app_utils import App, Bridge
 
+import board_db
 import push_to_karbon_assure as push_client
 from edge_node.features import compute_light_delta, compute_rsmi, compute_trend_slope
 from edge_node.trained_model import MODEL_VERSION, trained_predict
@@ -75,13 +78,15 @@ from edge_node.validity import check_validity
 bridge = Bridge()
 
 DATA_DIR        = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-POT_A_PATH      = os.path.join(DATA_DIR, "pot_a_readings.jsonl")
-POT_B_PATH      = os.path.join(DATA_DIR, "pot_b_readings.jsonl")
 SESSION_LOG     = os.path.join(DATA_DIR, "session_log.jsonl")
 # Latest-value only (overwritten each update, not appended) — unlike the
 # readings files this has no history value, and appending would just be
 # another ever-growing file for no benefit.
 SD_STATUS_PATH  = os.path.join(DATA_DIR, "sd_status.json")
+# Same "overwritten, not appended" shape as SD_STATUS_PATH, but for the QRB2210's
+# own eMMC/disk (docs/plan/board-disk-backup-routine.md's original ask -- distinct
+# from SD_STATUS_PATH, which reports the MCU side's physical SD card).
+BOARD_DISK_STATUS_PATH = os.path.join(DATA_DIR, "board_disk_status.json")
 
 os.makedirs(DATA_DIR, exist_ok=True)
 
@@ -156,8 +161,21 @@ _write_session_start(_ntp_info)
 # destinations disables push entirely rather than crashing the read loop --
 # the board must keep working fully offline (local JSONL logging is the
 # durable source of truth regardless of cloud-sync state).
+#
+# "local" disabled here in code (2026-09-11): the local LAN demo backend
+# hasn't been running, so every push to it failed and retried forever --
+# sync_queue_local.db grew to 296MB (of 296k queued evidence rows, only 8.6%
+# ever synced) and filled the board's disk (see docs/plan/nn-inference-
+# upgrade-plan.md). Relying on unsetting KARBON_ASSURE_LOCAL_* in .env alone
+# wasn't reliable (a stray/duplicate main.py process kept running with the
+# old env and recreated the queue file after deletion) -- pinning the
+# destination list here is deterministic regardless of .env state or which
+# process instance is running. Re-add "local" to the tuple below (or pass
+# push_client.DEFAULT_DESTINATIONS) once the local demo backend is actually
+# back in use.
 try:
-    _push_configs = push_client.load_configs()
+    # _push_configs = push_client.load_configs()  # commented out 2026-09-11, see note above
+    _push_configs = push_client.load_configs(names=("cloud",))
 except push_client.ConfigError as e:
     print(f"[Push] WARN: {e} — evidence/raw push disabled, logging locally only.", flush=True)
     _push_configs = {}
@@ -244,6 +262,78 @@ def _push_evidence_if_ready(pot: str, rec: dict, sample_index: int):
         push_client.push_evidence(record, config, db_path=push_client.db_path_for(name))
 
 
+_DISK_STATUS_INTERVAL_S = 60  # disk usage doesn't move fast enough to need every reading cycle
+_last_disk_status_at = 0.0
+
+
+def _maybe_report_disk_status():
+    """Overwrite BOARD_DISK_STATUS_PATH with the QRB2210's own live free/used/
+    total disk space, at most once every _DISK_STATUS_INTERVAL_S -- the
+    dashboard reads this (real_source.py's get_status()) to show a low-disk
+    warning, the manual cue to run a backup/rotation pass (board-disk-backup-
+    routine.md's original ask)."""
+    global _last_disk_status_at
+    now = time.time()
+    if now - _last_disk_status_at < _DISK_STATUS_INTERVAL_S:
+        return
+    _last_disk_status_at = now
+    try:
+        usage = shutil.disk_usage(DATA_DIR)
+    except OSError as e:
+        print(f"[Disk] WARN: could not read board disk usage: {e}", flush=True)
+        return
+    entry = {
+        "board_disk_used_mb": round(usage.used / (1024 * 1024), 1),
+        "board_disk_free_mb": round(usage.free / (1024 * 1024), 1),
+        "board_disk_total_mb": round(usage.total / (1024 * 1024), 1),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    tmp_path = BOARD_DISK_STATUS_PATH + ".tmp"
+    with open(tmp_path, "w") as f:
+        json.dump(entry, f)
+    os.replace(tmp_path, BOARD_DISK_STATUS_PATH)
+
+
+_last_prune_date = None  # UTC date string ("YYYY-MM-DD") prune_old() last ran for
+
+
+def _maybe_prune_old():
+    """Run board_db.prune_old() at most once per UTC calendar day -- it's a
+    rollup+delete+vacuum pass, not something to run on every reading (see its
+    own docstring). A plain date-string comparison, checked on the already-
+    per-reading handle_reading() call, is enough: worst case it runs once extra
+    on a restart that lands on a new date, which is harmless (idempotent)."""
+    global _last_prune_date
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if today == _last_prune_date:
+        return
+    _last_prune_date = today
+    with board_db.connect() as conn:
+        result = board_db.prune_old(conn)
+    if result["deleted_readings"] or result["deleted_inference"]:
+        print(f"[Prune] rolled up + removed rows older than {result['cutoff_date']}: "
+              f"{result['deleted_readings']} readings, {result['deleted_inference']} inference results",
+              flush=True)
+    if result["protected_dates"]:
+        print(f"[Prune] WARNING: kept {len(result['protected_dates'])} pot/day pair(s) past retention "
+              f"because inference hasn't caught up yet -- is scripts/inference_service.py --watch running? "
+              f"{result['protected_dates']}", flush=True)
+
+
+def _flush_pending():
+    """Retry whatever's due for retry in each destination's sync queue --
+    push_to_karbon_assure.flush_pending()'s own docstring calls for this to
+    run "once per reading cycle" so records queued during an outage sync
+    once connectivity returns, but nothing was actually calling it (bug
+    found 2026-09-16: every queued row had attempts=1 and sat forever past
+    its backoff window). limit_per_kind=20 per call plus get_pending's own
+    next_attempt_at filter keeps this cheap and naturally rate-limited."""
+    if not _push_configs:
+        return
+    for name, config in _push_configs.items():
+        push_client.flush_pending(config, db_path=push_client.db_path_for(name))
+
+
 def _push_raw_if_batch_full(pot: str, rec: dict, sample_index: int):
     if not _push_configs:
         return
@@ -303,10 +393,14 @@ def handle_log(msg):
 
 
 def handle_reading(msg):
-    """Parse a 14-field CSV reading from sketch v7.0 and append two JSONL records.
+    """Parse a 14-field CSV reading from sketch v7.0 and insert two rows into
+    board_db's readings table (was: append two JSONL records -- see
+    docs/plan/sqlite-storage-migration.md for why this moved to SQLite).
 
     Field layout — see module docstring above.
-    Data is APPENDED (not overwritten) so history survives restarts.
+    Data is durably persisted across restarts (readings table, not truncated
+    except by board_db.prune_old()'s daily rollup-then-delete of rows older
+    than board_db.RETENTION_DAYS).
     """
     try:
         parts = msg.split(",")
@@ -360,15 +454,30 @@ def handle_reading(msg):
 
     os.makedirs(DATA_DIR, exist_ok=True)
 
-    # Write Pot A only if its BME had a valid reading this cycle.
-    if not all_zero_a:
-        with open(POT_A_PATH, "a") as f:
-            f.write(json.dumps(rec_a) + "\n")
-
-    # Write Pot B only if its BME had a valid reading this cycle.
-    if not all_zero_b:
-        with open(POT_B_PATH, "a") as f:
-            f.write(json.dumps(rec_b) + "\n")
+    # Insert Pot A/B rows only if their BME had a valid reading this cycle.
+    # One connection for both -- board_db.connect() commits/closes on exit, so
+    # this is one durable transaction per reading cycle rather than two.
+    #
+    # sqlite3.OperationalError guard (2026-09-17 incident): main.py and
+    # scripts/inference_service.py are two independent processes writing to the
+    # same board_db file concurrently -- a transient "database is locked" here
+    # must not crash the read loop (same "a bug in one path must never take down
+    # ingestion" philosophy the cloud-push try/except below already follows).
+    # This does mean sample_index can drop a reading on a lock collision -- rare
+    # (see board_db.py's _CONNECT_TIMEOUT_S/schema-caching fix reducing how often
+    # collisions happen at all) and logged loudly, not silent, since this is the
+    # durable source of truth, unlike a cloud-push retry.
+    try:
+        with board_db.connect() as conn:
+            if not all_zero_a:
+                board_db.insert_reading(conn, "A", rec_a)
+            if not all_zero_b:
+                board_db.insert_reading(conn, "B", rec_b)
+        _maybe_prune_old()
+        _maybe_report_disk_status()
+    except sqlite3.OperationalError as e:
+        print(f"[Reading] WARN: sample {sample_index} DROPPED (db write failed: {e}) -- "
+              f"local storage still contended, will retry on next reading", flush=True)
 
     # Cloud push (never blocks/undoes the local JSONL write above, which
     # already happened -- any push failure here is queued for retry by
@@ -380,6 +489,7 @@ def handle_reading(msg):
         if not all_zero_b:
             _push_evidence_if_ready("B", rec_b, sample_index)
             _push_raw_if_batch_full("B", rec_b, sample_index)
+        _flush_pending()
     except Exception as e:  # noqa: BLE001 — a push-path bug must never take down the read loop
         print(f"[Push] WARN: cloud push failed for sample {sample_index}: {e}")
 
