@@ -37,9 +37,13 @@ any -- the window with the latest `start` <= a row's timestamp wins). Valid `lab
 decision_tree.classify()'s leaf flags: sensor_fault, drought_onset, moisture_low,
 waterlogged_risk, soil_health_degrading, stable.
 
+2026-09-16: reads board_db's `readings` table (see docs/plan/sqlite-storage-migration.md)
+instead of parsing pot_a_readings.jsonl / pot_b_readings.jsonl directly -- those files
+no longer exist once main.py/inference_service.py write to SQLite.
+
 Usage (stdlib + the edge_node package only, no dashboard/Flask dependency):
   .venv/bin/python scripts/build_training_set.py \\
-      pot_a_readings.jsonl pot_b_readings.jsonl \\
+      /path/to/sensor_data.db \\
       --observations observations.json \\
       --out training_set.jsonl
 """
@@ -51,7 +55,9 @@ import sys
 from collections import Counter
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "source"))
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "KA-Edge-source", "python"))
 
+import board_db  # noqa: E402
 from edge_node.decision_tree import classify  # noqa: E402
 from edge_node.features import compute_light_delta, compute_rsmi, compute_trend_slope  # noqa: E402
 from edge_node.validity import check_validity  # noqa: E402
@@ -73,21 +79,16 @@ VALID_LABELS = {
 }
 
 
-def load_records(path: str) -> list[dict]:
-    if not os.path.exists(path):
+def load_records(db_path: str, pot: str) -> list[dict]:
+    """All retained readings for pot, chronologically sorted. Rows older than
+    board_db.RETENTION_DAYS that have already been rolled up and pruned (see
+    board_db.prune_old) are NOT included here -- this reads live board history
+    for retraining, not the permanent daily rollup, which only has aggregates,
+    not per-row features."""
+    if not os.path.exists(db_path):
         return []
-    records = []
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                records.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue  # skip a partially-written line, same tolerance as real_source.py
-    records.sort(key=lambda r: r.get("received_at", ""))
-    return records
+    with board_db.connect(db_path) as conn:
+        return board_db.fetch_readings(conn, pot)
 
 
 def load_observations(path: str | None) -> list[dict]:
@@ -178,8 +179,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Build a labeled training set from real Pot A/B sensor history (PRD Section 5 steps 3-4)."
     )
-    parser.add_argument("pot_a_path", help="pot_a_readings.jsonl path")
-    parser.add_argument("pot_b_path", help="pot_b_readings.jsonl path")
+    parser.add_argument("db_path", help="sensor_data.db path (board_db's SQLite schema)")
     parser.add_argument("--observations", help="JSON file of observed-label override windows")
     parser.add_argument("--out", default="training_set.jsonl", help="output path (default: training_set.jsonl)")
     args = parser.parse_args()
@@ -189,9 +189,9 @@ def main() -> None:
         print(f"{args.observations}: {len(windows)} observation window(s)")
 
     all_rows = []
-    for pot, path in (("A", args.pot_a_path), ("B", args.pot_b_path)):
-        records = load_records(path)
-        print(f"{path}: {len(records)} records")
+    for pot in ("A", "B"):
+        records = load_records(args.db_path, pot)
+        print(f"{args.db_path} (pot {pot}): {len(records)} records")
         if len(records) < TREND_WINDOW:
             print(f"  -> fewer than TREND_WINDOW={TREND_WINDOW} records, no rows produced")
             continue
