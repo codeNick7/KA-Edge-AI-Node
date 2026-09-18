@@ -293,21 +293,44 @@ void doInit() {
   snprintf(msg, sizeof(msg), "soilB (A0) init: %.1f%% (raw %d)", pctB, rawB);
   report(msg);
 
-  // Write CSV header — fresh log each run
+  // Write CSV header only if this SD card doesn't already have a log on it.
+  // 2026-09-18: previously did sd.remove(LOG_FILENAME) unconditionally here
+  // ("fresh log each run") -- since this runs on every sketch restart, and
+  // session_log.jsonl (Python side) shows dozens of restarts across the real
+  // collection period, this card never actually held more than "since the
+  // last restart" despite being intended as a physically-removable backup of
+  // the full raw history (the whole reason it's on removable SD media
+  // instead of the board's soldered eMMC -- see
+  // docs/plan/board-disk-backup-routine.md for the corresponding Linux-side
+  // durability gap this mirrors). appendReadingToSD()'s sd.open(...,
+  // FILE_WRITE) already
+  // appends rather than overwrites for an existing file (standard SdFat/SD
+  // library FILE_WRITE semantics) -- the header-write path just needed the
+  // same "don't clobber what's already there" treatment.
+  //
+  // Known limitation, not fixed here: rows only carry millis()-since-boot,
+  // not a wall-clock timestamp, so recovering this file after a board
+  // failure tells you relative timing within each boot session but not
+  // calendar time -- cross-reference against the Python side's
+  // session_log.jsonl (which does have wall-clock session_start times) to
+  // anchor a given stretch of rows to an actual date/time.
   if (cardReady && (bmeAReady || bmeBReady)) {
-    sd.remove(LOG_FILENAME);
-    dataFile = sd.open(LOG_FILENAME, FILE_WRITE);
-    if (dataFile) {
-      dataFile.println(
-        "#,millis_ms,"
-        "tempA_C,humA_pct,pressA_hPa,gasA_KOhm,"
-        "tempB_C,humB_pct,pressB_hPa,gasB_KOhm,"
-        "lightA_lux,lightB_lux,"
-        "moistureA_pct,moistureB_pct");
-      dataFile.close();
-      report("CSV header written — starting 1 Hz sensor log");
+    if (!sd.exists(LOG_FILENAME)) {
+      dataFile = sd.open(LOG_FILENAME, FILE_WRITE);
+      if (dataFile) {
+        dataFile.println(
+          "#,millis_ms,"
+          "tempA_C,humA_pct,pressA_hPa,gasA_KOhm,"
+          "tempB_C,humB_pct,pressB_hPa,gasB_KOhm,"
+          "lightA_lux,lightB_lux,"
+          "moistureA_pct,moistureB_pct");
+        dataFile.close();
+        report("CSV header written — new sensor log started");
+      } else {
+        report("WARN: could not open file for CSV header");
+      }
     } else {
-      report("WARN: could not open file for CSV header");
+      report("Existing sensor_log.csv found on SD — appending across restart, not overwriting");
     }
   }
 

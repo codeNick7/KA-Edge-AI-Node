@@ -62,6 +62,53 @@ Architecture doc's own §9 "Rotation policy" (already written, never implemented
 
 Teach `real_source.py`'s `overall`/`week` (and possibly `today`, if the window shrinks below a day) code paths to merge `rollup.db` daily aggregates for the archived-away period with the fresh JSONL window for recent data, so the board's own dashboard doesn't lose historical context after Phase 1 starts truncating. Not started until Phase 1 is working and the schema above is validated against real usage.
 
+## Durability gap found 2026-09-18 (separate from disk-space; not yet fully closed)
+
+While debugging why the physical SD card couldn't be mounted on the Linux/QRB2210
+side (blocked by a hardware issue -- see below), a real question came up: if the
+board's eMMC fails, is the raw sensor history actually recoverable from anywhere
+else? Investigation found:
+
+- **The MCU-side SD card (`KA-Edge-source/sketch/sketch.ino`) was never a working
+  historical backup**, despite writing every reading to `sensor_log.csv` in
+  parallel with the Bridge/Linux path. `doInit()` did `sd.remove(LOG_FILENAME)`
+  unconditionally on every sketch restart ("fresh log each run") -- with dozens of
+  restarts across the real collection period (`session_log.jsonl`), that file only
+  ever held "since the last restart," not full history. **Fixed 2026-09-18**:
+  `doInit()` now only writes the header if the log doesn't already exist, so it
+  appends across restarts like the Python-side files already do. Not yet
+  hardware-tested (no arduino-cli/board core available in this environment to
+  compile-check `.ino` files) -- verify it compiles and flashes via Arduino App Lab
+  before trusting it. Known residual limitation, not fixed: rows carry only
+  `millis()`-since-boot, no wall-clock timestamp -- cross-reference against
+  `session_log.jsonl`'s session_start times to anchor a stretch of rows to a real
+  date.
+- **Mounting that same SD card on the Linux side (as extra `board_db.py` storage or
+  an independent backup target) is blocked by hardware, not software**: the QRB2210
+  requires the single USB-C port to be in Host mode (default is Device mode --
+  confirmed bug in the `dwc3-qcom` driver when booted without a cable already
+  attached; live debugfs workaround: `echo host > /sys/kernel/debug/usb/4e00000.usb/mode`,
+  not yet made persistent via a systemd unit) AND that port's VBUS is only sourced
+  from `5V_SYS`, which is unavailable when the board itself is powered *through*
+  that same USB-C port (per the ABX00162/173 datasheet). The user's current dongle
+  is also a dual-USB-C-prong hub built for adjacent-port MacBooks and physically
+  cannot deliver USB data to this single-port board regardless of any of the above.
+  Needs a single-connector powered USB-C hub/dongle (Arduino's own datasheet lists
+  this as the supported accessory) before revisiting.
+- **Cloud sync (the architecture's originally-intended off-board durability path)
+  is still broken** (`HTTP 404: Unknown device 'edge-node-01'`, 0% synced) --
+  separate issue, flagged earlier, not addressed.
+- **The recurring "backup raw data to this laptop" routine from this session's
+  original ask was never built** -- superseded by the SQLite migration, which
+  fixed disk-space but not this durability question. `migrate_jsonl_to_sqlite.py`
+  is a one-time format-migration tool, not a repeatable backup.
+
+Net effect as of 2026-09-18: if the board's eMMC fails today, the only recovery
+point is the one-time `data-from-board/pre-sqlite-migration/` snapshot on this
+laptop (Sept 16) -- nothing collected since then is backed up anywhere else. User
+chose to prioritize the SD-card sketch fix first; the recurring-laptop-backup and
+cloud-sync-registration gaps remain open.
+
 ## TODO
 
 - [ ] Confirm retention window default (3 days?) and rollup schema above.
