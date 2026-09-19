@@ -109,6 +109,26 @@ laptop (Sept 16) -- nothing collected since then is backed up anywhere else. Use
 chose to prioritize the SD-card sketch fix first; the recurring-laptop-backup and
 cloud-sync-registration gaps remain open.
 
+**2026-09-19 decision: mounting the SD card on the Linux side is paused, not
+abandoned.** Extensive back-and-forth (host-mode debugfs fix, VBUS-sourcing
+mechanism, dongle compatibility, VIN/5V_SYS power-input options, CCTV SMPS/PD-
+trigger/battery options for powering VIN) confirmed the approach is technically
+sound, but every viable power source for `VIN` assumes mains access near the
+board, which the user does not have at the current install location. Decision:
+keep relying on the MCU-side SD card (sketch.ino, restart-wipe bug fixed this
+session, not yet hardware-verified) as the local backup for now, and return focus
+to data collection/analysis. Revisit Linux-side SD mounting once either mains
+access changes or a portable `VIN` power solution is found.
+
+**Explicitly deferred, to revisit later per user request**: the `HTTP 404: Unknown
+device 'edge-node-01'` cloud-sync registration issue (see
+docs/plan/sqlite-storage-migration.md) -- flagged repeatedly this session, still
+unfixed, user wants to come back to it.
+
+**Explicitly dropped per user request**: the recurring backup-to-laptop routine
+from this session's original ask. User backs up manually when needed; not
+building an automated version.
+
 ## TODO
 
 - [ ] Confirm retention window default (3 days?) and rollup schema above.
