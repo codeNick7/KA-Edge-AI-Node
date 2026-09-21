@@ -20,11 +20,18 @@
 # KARBON_ASSURE_DEVICE_SECRET (see push_to_karbon_assure.py), gitignored and
 # never meant to leave the board it was issued for -- overwriting it from a
 # dev machine's .env (if one even exists locally) would silently break the
-# board's push auth or point it at the wrong destination. Files are copied
-# individually (not a wholesale directory copy) specifically so a stray
-# local .env can never be swept up by accident.
+# board's push auth or point it at the wrong destination. Python files are
+# copied individually (not a wholesale directory copy) specifically so a
+# stray local .env can never be swept up by accident. The sketch/ directory
+# has no such secret and is copied wholesale (see below), so it never misses
+# a file (header, extra .ino tab, etc.) added later without this script
+# being updated to know its name.
 #
 # Requires: SSH access to the board already set up (key or password prompt).
+# This script opens one authenticated SSH connection up front (ControlMaster,
+# same pattern deploy_dashboard_to_board.sh already uses) and every later
+# ssh/scp call below reuses it, so a password (if you're not using key auth)
+# is asked for once per run, not once per file/group.
 
 set -euo pipefail
 
@@ -35,24 +42,32 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PY_DIR="${REPO_ROOT}/KA-Edge-source/python"
 SKETCH_DIR="${REPO_ROOT}/KA-Edge-source/sketch"
 
+CONTROL_PATH="$(mktemp -u /tmp/ka-deploy-ssh-XXXXXX)"
+SSH_OPTS=(-o "ControlMaster=auto" -o "ControlPath=${CONTROL_PATH}" -o "ControlPersist=60")
+cleanup() { ssh "${SSH_OPTS[@]}" -O exit "${BOARD}" 2>/dev/null || true; }
+trap cleanup EXIT
+
+echo "== Opening one SSH connection to ${BOARD} (reused for every call below) =="
+ssh "${SSH_OPTS[@]}" "${BOARD}" true
+
 echo "== Cleaning local Python build artefacts under ${PY_DIR} =="
 find "${PY_DIR}" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 find "${PY_DIR}" -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
 find "${PY_DIR}" -type f -name "*.pyc" -delete
 
 echo "== Copying board-side Python (main.py + friends, no .env) to ${BOARD}:${DEST}/python =="
-ssh "${BOARD}" "mkdir -p '${DEST}/python' '${DEST}/sketch'"
-scp \
+ssh "${SSH_OPTS[@]}" "${BOARD}" "mkdir -p '${DEST}/python' '${DEST}/sketch'"
+scp "${SSH_OPTS[@]}" \
   "${PY_DIR}/main.py" \
   "${PY_DIR}/board_db.py" \
   "${PY_DIR}/push_to_karbon_assure.py" \
   "${PY_DIR}/sync_queue.py" \
   "${PY_DIR}/requirements.txt" \
   "${BOARD}:${DEST}/python/"
-scp -r "${PY_DIR}/edge_node" "${BOARD}:${DEST}/python/"
+scp "${SSH_OPTS[@]}" -r "${PY_DIR}/edge_node" "${BOARD}:${DEST}/python/"
 
-echo "== Copying Arduino sketch to ${BOARD}:${DEST}/sketch =="
-scp "${SKETCH_DIR}/sketch.ino" "${BOARD}:${DEST}/sketch/"
+echo "== Copying Arduino sketch (every file under KA-Edge-source/sketch/) to ${BOARD}:${DEST}/sketch =="
+scp "${SSH_OPTS[@]}" -r "${SKETCH_DIR}"/* "${BOARD}:${DEST}/sketch/"
 
 echo "== Done. .env was NOT touched -- board's existing KARBON_ASSURE_* config is untouched."
 echo "   On the board: cd ${DEST}/python && pip install -r requirements.txt"
