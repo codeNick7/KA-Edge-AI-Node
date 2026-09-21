@@ -1,3 +1,13 @@
+// v7.5 — Added SKETCH_VERSION, reported over Bridge as the very first thing
+// doInit() does (before any sensor/SD init), so the Python console always
+// shows which sketch version is actually running on the board -- a comment
+// at the top of this file isn't visible once deployed, and this session hit
+// exactly that ambiguity while debugging a doInit() hang after a deploy.
+// Also: doInit() no longer wipes sensor_log.csv on every restart (see the
+// "Write CSV header only if..." block below) -- still has TEMPORARY DEBUG
+// report() calls bracketing the sd.exists() check from that same ongoing
+// investigation; remove those once resolved.
+//
 // v7.4 — BH1750 Pot A/Pot B were swapped: the ADDR->GND unit (0x23) was
 // coded as Pot A but is physically mounted at Pot B (the withering pot),
 // confirmed by physical inspection 2026-08-22. Same bug class as the
@@ -47,6 +57,7 @@
 
 const int chipSelect = 10;
 const char *LOG_FILENAME = "sensor_log.csv";
+const char *SKETCH_VERSION = "v7.5";
 
 SdFat sd;
 File dataFile;
@@ -226,6 +237,13 @@ int sampleIndex = 0;
 void doInit() {
   char msg[96];
 
+  // Report the running sketch version FIRST, before anything that could
+  // fail or hang (SD/sensor init below) -- so the Python console always
+  // confirms which build actually made it to the board, even if doInit()
+  // never completes past this point.
+  snprintf(msg, sizeof(msg), "SKETCH_VERSION: %s", SKETCH_VERSION);
+  report(msg);
+
   // SD card
   for (int retry = 0; retry < 3; retry++) {
     cardReady = sd.begin(chipSelect);
@@ -314,7 +332,9 @@ void doInit() {
   // calendar time -- cross-reference against the Python side's
   // session_log.jsonl (which does have wall-clock session_start times) to
   // anchor a given stretch of rows to an actual date/time.
+  report("DEBUG: before sd.exists() check");  // TEMPORARY -- 2026-09-19 diagnostic, remove once resolved
   if (cardReady && (bmeAReady || bmeBReady)) {
+    report("DEBUG: about to call sd.exists()");  // TEMPORARY
     if (!sd.exists(LOG_FILENAME)) {
       dataFile = sd.open(LOG_FILENAME, FILE_WRITE);
       if (dataFile) {
@@ -333,6 +353,7 @@ void doInit() {
       report("Existing sensor_log.csv found on SD — appending across restart, not overwriting");
     }
   }
+  report("DEBUG: after sd.exists() block, about to set STREAMING");  // TEMPORARY
 
   state = STATE_STREAMING;
 }
