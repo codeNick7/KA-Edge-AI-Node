@@ -5,7 +5,7 @@
 // exactly that ambiguity while debugging a doInit() hang after a deploy.
 // Also: doInit() no longer wipes sensor_log.csv on every restart (see the
 // "Write CSV header only if..." block below) -- still has TEMPORARY DEBUG
-// report() calls bracketing the sd.exists() check from that same ongoing
+// reportNow() calls bracketing the sd.exists() check from that same ongoing
 // investigation; remove those once resolved.
 //
 // v7.4 — BH1750 Pot A/Pot B were swapped: the ADDR->GND unit (0x23) was
@@ -135,6 +135,21 @@ void report(const char *msg) {
   }
 }
 
+// TEMPORARY -- 2026-09-21 diagnostic. report()'s messages only get sent by
+// loop()'s drain code, which runs AFTER doInit() returns -- meaning if
+// doInit() hangs ANYWHERE (including in code untouched by recent changes,
+// like sd.begin()'s retry loop or a bmeA/bmeB.begin() call), NOTHING queued
+// before the hang ever gets sent either. That made the SKETCH_VERSION report
+// added earlier unable to actually prove doInit() started, which was a real
+// gap in that diagnostic. reportNow() bypasses the queue and transmits
+// immediately, so each call in doInit() below shows real-time progress on
+// the Python console regardless of what happens afterward -- remove this
+// and revert doInit()'s calls back to report() once the hang is found.
+void reportNow(const char *msg) {
+  Bridge.notify("sd_status", msg);
+  Bridge.update();
+}
+
 // ── SD card free-space reporting ──────────────────────────────────────────
 // NOT sent through the reportLines[] queue above — that queue is a bounded
 // (MAX_REPORT_LINES=40) one-shot buffer for init diagnostics; once drained
@@ -242,7 +257,7 @@ void doInit() {
   // confirms which build actually made it to the board, even if doInit()
   // never completes past this point.
   snprintf(msg, sizeof(msg), "SKETCH_VERSION: %s", SKETCH_VERSION);
-  report(msg);
+  reportNow(msg);
 
   // SD card
   for (int retry = 0; retry < 3; retry++) {
@@ -251,17 +266,17 @@ void doInit() {
     delay(100);
   }
   snprintf(msg, sizeof(msg), "sd.begin(%d): %s", chipSelect, cardReady ? "OK" : "FAILED");
-  report(msg);
+  reportNow(msg);
   if (!cardReady) {
     snprintf(msg, sizeof(msg), "sdErrorCode: 0x%02X sdErrorData: 0x%08lX",
              sd.sdErrorCode(), (unsigned long)sd.sdErrorData());
-    report(msg);
+    reportNow(msg);
   }
 
   // BME688 Pot A — 0x76
   bmeAReady = bmeA.begin(0x76);
   snprintf(msg, sizeof(msg), "bmeA (0x76): %s", bmeAReady ? "OK" : "FAILED");
-  report(msg);
+  reportNow(msg);
   if (bmeAReady) {
     bmeA.setTemperatureOversampling(BME680_OS_8X);
     bmeA.setHumidityOversampling(BME680_OS_2X);
@@ -273,7 +288,7 @@ void doInit() {
   // BME688 Pot B — 0x77
   bmeBReady = bmeB.begin(0x77);
   snprintf(msg, sizeof(msg), "bmeB (0x77): %s", bmeBReady ? "OK" : "FAILED");
-  report(msg);
+  reportNow(msg);
   if (bmeBReady) {
     bmeB.setTemperatureOversampling(BME680_OS_8X);
     bmeB.setHumidityOversampling(BME680_OS_2X);
@@ -291,25 +306,25 @@ void doInit() {
   // BH1750 Pot A — 0x5C (ADDR pin -> VCC)
   lightAReady = lightA.begin(BH1750_TO_VCC, &Wire);
   snprintf(msg, sizeof(msg), "lightA (0x5C): %s", lightAReady ? "OK" : "FAILED");
-  report(msg);
+  reportNow(msg);
   if (lightAReady) lightA.start(BH1750_QUALITY_HIGH2, BH1750_MTREG_DEFAULT);
 
   // BH1750 Pot B — 0x23 (ADDR pin -> GND)
   lightBReady = lightB.begin(BH1750_TO_GROUND, &Wire);
   snprintf(msg, sizeof(msg), "lightB (0x23): %s", lightBReady ? "OK" : "FAILED");
-  report(msg);
+  reportNow(msg);
   if (lightBReady) lightB.start(BH1750_QUALITY_HIGH2, BH1750_MTREG_DEFAULT);
 
   // Soil sensors — initial ADC diagnostic readings
   int rawA = analogRead(SOIL_PIN_A);
   float pctA = soilPct(SOIL_PIN_A);
   snprintf(msg, sizeof(msg), "soilA (A1) init: %.1f%% (raw %d)", pctA, rawA);
-  report(msg);
+  reportNow(msg);
 
   int rawB = analogRead(SOIL_PIN_B);
   float pctB = soilPct(SOIL_PIN_B);
   snprintf(msg, sizeof(msg), "soilB (A0) init: %.1f%% (raw %d)", pctB, rawB);
-  report(msg);
+  reportNow(msg);
 
   // Write CSV header only if this SD card doesn't already have a log on it.
   // 2026-09-18: previously did sd.remove(LOG_FILENAME) unconditionally here
@@ -332,9 +347,9 @@ void doInit() {
   // calendar time -- cross-reference against the Python side's
   // session_log.jsonl (which does have wall-clock session_start times) to
   // anchor a given stretch of rows to an actual date/time.
-  report("DEBUG: before sd.exists() check");  // TEMPORARY -- 2026-09-19 diagnostic, remove once resolved
+  reportNow("DEBUG: before sd.exists() check");  // TEMPORARY -- 2026-09-19 diagnostic, remove once resolved
   if (cardReady && (bmeAReady || bmeBReady)) {
-    report("DEBUG: about to call sd.exists()");  // TEMPORARY
+    reportNow("DEBUG: about to call sd.exists()");  // TEMPORARY
     if (!sd.exists(LOG_FILENAME)) {
       dataFile = sd.open(LOG_FILENAME, FILE_WRITE);
       if (dataFile) {
@@ -345,15 +360,15 @@ void doInit() {
           "lightA_lux,lightB_lux,"
           "moistureA_pct,moistureB_pct");
         dataFile.close();
-        report("CSV header written — new sensor log started");
+        reportNow("CSV header written — new sensor log started");
       } else {
-        report("WARN: could not open file for CSV header");
+        reportNow("WARN: could not open file for CSV header");
       }
     } else {
-      report("Existing sensor_log.csv found on SD — appending across restart, not overwriting");
+      reportNow("Existing sensor_log.csv found on SD — appending across restart, not overwriting");
     }
   }
-  report("DEBUG: after sd.exists() block, about to set STREAMING");  // TEMPORARY
+  reportNow("DEBUG: after sd.exists() block, about to set STREAMING");  // TEMPORARY
 
   state = STATE_STREAMING;
 }
