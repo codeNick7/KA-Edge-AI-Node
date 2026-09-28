@@ -1,12 +1,17 @@
+// v7.6 — 2026-09-22: Clean fix for 1 Hz raw sensor debug output (write_log
+// channel) and SD card access reporting (SD:OK/FAIL). Explicitly initializes
+// Wire, Wire1, and SPI buses before sensor begin() calls. Removed problematic
+// sd.exists() check; replaced with direct file open and size() == 0 header check.
+// Streamlined report() to transmit immediately without in-memory queue delays.
+// doStreamOneReading safely falls back to 0.0f for offline sensors.
+//
 // v7.5 — Added SKETCH_VERSION, reported over Bridge as the very first thing
 // doInit() does (before any sensor/SD init), so the Python console always
 // shows which sketch version is actually running on the board -- a comment
 // at the top of this file isn't visible once deployed, and this session hit
 // exactly that ambiguity while debugging a doInit() hang after a deploy.
 // Also: doInit() no longer wipes sensor_log.csv on every restart (see the
-// "Write CSV header only if..." block below) -- still has TEMPORARY DEBUG
-// reportNow() calls bracketing the sd.exists() check from that same ongoing
-// investigation; remove those once resolved.
+// "Write CSV header only if..." block below).
 //
 // v7.4 — BH1750 Pot A/Pot B were swapped: the ADDR->GND unit (0x23) was
 // coded as Pot A but is physically mounted at Pot B (the withering pot),
@@ -57,7 +62,7 @@
 
 const int chipSelect = 10;
 const char *LOG_FILENAME = "sensor_log.csv";
-const char *SKETCH_VERSION = "v7.5";
+const char *SKETCH_VERSION = "v7.6 (2026-09-22)";
 
 SdFat sd;
 File dataFile;
@@ -122,47 +127,16 @@ hp_BH1750 lightB;
 bool lightBReady = false;
 float lastLuxB = 0.0f;
 
-// ── Report / reading message queues ──────────────────────────────────────
-#define MAX_REPORT_LINES 40
-char reportLines[MAX_REPORT_LINES][96];
-int reportCount  = 0;
-int reportCursor = 0;
-
+// ── Bridge report helper ──────────────────────────────────────────────────
+// Transmits init status messages immediately to the sd_status channel
 void report(const char *msg) {
-  if (reportCount < MAX_REPORT_LINES) {
-    snprintf(reportLines[reportCount], sizeof(reportLines[reportCount]), "%s", msg);
-    reportCount++;
-  }
-}
-
-// TEMPORARY -- 2026-09-21 diagnostic. report()'s messages only get sent by
-// loop()'s drain code, which runs AFTER doInit() returns -- meaning if
-// doInit() hangs ANYWHERE (including in code untouched by recent changes,
-// like sd.begin()'s retry loop or a bmeA/bmeB.begin() call), NOTHING queued
-// before the hang ever gets sent either. That made the SKETCH_VERSION report
-// added earlier unable to actually prove doInit() started, which was a real
-// gap in that diagnostic. reportNow() bypasses the queue and transmits
-// immediately, so each call in doInit() below shows real-time progress on
-// the Python console regardless of what happens afterward -- remove this
-// and revert doInit()'s calls back to report() once the hang is found.
-void reportNow(const char *msg) {
   Bridge.notify("sd_status", msg);
   Bridge.update();
 }
 
 // ── SD card free-space reporting ──────────────────────────────────────────
-// NOT sent through the reportLines[] queue above — that queue is a bounded
-// (MAX_REPORT_LINES=40) one-shot buffer for init diagnostics; once drained
-// it never accepts more, so a periodic reading would silently stop being
-// delivered after the first ~40 messages. This sends directly on the same
-// "sd_status" Bridge channel instead, on its own timer.
-//
-// freeClusterCount() walks the FAT, which can take a noticeable amount of
-// time on some cards/library versions — do NOT call this every 1 Hz loop
-// tick, or it risks stalling the sensor sampling cadence. 60s is a starting
-// guess; this has not been timed on the real board (no hardware access in
-// this session) — if it visibly hitches the 1 Hz log on real hardware,
-// raise SD_SPACE_REPORT_INTERVAL_MS further.
+// NOT sent through the reportLines queue — sends directly on the "sd_status"
+// Bridge channel on its own timer when enabled.
 const unsigned long SD_SPACE_REPORT_INTERVAL_MS = 60000;
 unsigned long lastSdSpaceReportMs = 0;
 
@@ -188,17 +162,9 @@ void reportSdSpace() {
 // and the Bridge message carry exactly the same ADC reading.
 void buildReadingLine(char *out, size_t outLen,
                       int index,
-                      float moistA, float moistB) {
-  float tA = bmeAReady ? bmeA.temperature          : 0.0f;
-  float hA = bmeAReady ? bmeA.humidity              : 0.0f;
-  float pA = bmeAReady ? bmeA.pressure / 100.0f    : 0.0f;
-  float gA = bmeAReady ? bmeA.gas_resistance / 1000.0f : 0.0f;
-
-  float tB = bmeBReady ? bmeB.temperature          : 0.0f;
-  float hB = bmeBReady ? bmeB.humidity              : 0.0f;
-  float pB = bmeBReady ? bmeB.pressure / 100.0f    : 0.0f;
-  float gB = bmeBReady ? bmeB.gas_resistance / 1000.0f : 0.0f;
-
+                      float moistA, float moistB,
+                      float tA, float hA, float pA, float gA,
+                      float tB, float hB, float pB, float gB) {
   snprintf(out, outLen,
            "%d,%lu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f",
            index, millis(),
@@ -208,19 +174,11 @@ void buildReadingLine(char *out, size_t outLen,
            moistA, moistB);
 }
 
-bool appendReadingToSD(int index, float moistA, float moistB) {
+bool appendReadingToSD(int index, float moistA, float moistB,
+                       float tA, float hA, float pA, float gA,
+                       float tB, float hB, float pB, float gB) {
   dataFile = sd.open(LOG_FILENAME, FILE_WRITE);
   if (!dataFile) return false;
-
-  float tA = bmeAReady ? bmeA.temperature          : 0.0f;
-  float hA = bmeAReady ? bmeA.humidity              : 0.0f;
-  float pA = bmeAReady ? bmeA.pressure / 100.0f    : 0.0f;
-  float gA = bmeAReady ? bmeA.gas_resistance / 1000.0f : 0.0f;
-
-  float tB = bmeBReady ? bmeB.temperature          : 0.0f;
-  float hB = bmeBReady ? bmeB.humidity              : 0.0f;
-  float pB = bmeBReady ? bmeB.pressure / 100.0f    : 0.0f;
-  float gB = bmeBReady ? bmeB.gas_resistance / 1000.0f : 0.0f;
 
   dataFile.print(index);        dataFile.print(",");
   dataFile.print(millis());     dataFile.print(",");
@@ -254,10 +212,14 @@ void doInit() {
 
   // Report the running sketch version FIRST, before anything that could
   // fail or hang (SD/sensor init below) -- so the Python console always
-  // confirms which build actually made it to the board, even if doInit()
-  // never completes past this point.
+  // confirms which build actually made it to the board.
   snprintf(msg, sizeof(msg), "SKETCH_VERSION: %s", SKETCH_VERSION);
-  reportNow(msg);
+  report(msg);
+
+  // Bring up I2C and SPI buses up front
+  Wire.begin();
+  Wire1.begin();
+  SPI.begin();
 
   // SD card
   for (int retry = 0; retry < 3; retry++) {
@@ -266,17 +228,17 @@ void doInit() {
     delay(100);
   }
   snprintf(msg, sizeof(msg), "sd.begin(%d): %s", chipSelect, cardReady ? "OK" : "FAILED");
-  reportNow(msg);
+  report(msg);
   if (!cardReady) {
     snprintf(msg, sizeof(msg), "sdErrorCode: 0x%02X sdErrorData: 0x%08lX",
              sd.sdErrorCode(), (unsigned long)sd.sdErrorData());
-    reportNow(msg);
+    report(msg);
   }
 
-  // BME688 Pot A — 0x76
+  // BME688 Pot A — 0x76 on Wire1 (Qwiic)
   bmeAReady = bmeA.begin(0x76);
   snprintf(msg, sizeof(msg), "bmeA (0x76): %s", bmeAReady ? "OK" : "FAILED");
-  reportNow(msg);
+  report(msg);
   if (bmeAReady) {
     bmeA.setTemperatureOversampling(BME680_OS_8X);
     bmeA.setHumidityOversampling(BME680_OS_2X);
@@ -285,10 +247,10 @@ void doInit() {
     bmeA.setGasHeater(320, 150);
   }
 
-  // BME688 Pot B — 0x77
+  // BME688 Pot B — 0x77 on Wire1 (Qwiic)
   bmeBReady = bmeB.begin(0x77);
   snprintf(msg, sizeof(msg), "bmeB (0x77): %s", bmeBReady ? "OK" : "FAILED");
-  reportNow(msg);
+  report(msg);
   if (bmeBReady) {
     bmeB.setTemperatureOversampling(BME680_OS_8X);
     bmeB.setHumidityOversampling(BME680_OS_2X);
@@ -297,78 +259,51 @@ void doInit() {
     bmeB.setGasHeater(320, 150);
   }
 
-  // BH1750s are on the standard header Wire bus, not Wire1/Qwiic (see
-  // their declaration comment) -- that bus needs its own explicit begin(),
-  // unlike Wire1 which the board's core/Bridge framework already brings up
-  // for the Qwiic BME688 chain.
-  Wire.begin();
-
-  // BH1750 Pot A — 0x5C (ADDR pin -> VCC)
+  // BH1750 Pot A — 0x5C on Wire (ADDR pin -> VCC)
   lightAReady = lightA.begin(BH1750_TO_VCC, &Wire);
   snprintf(msg, sizeof(msg), "lightA (0x5C): %s", lightAReady ? "OK" : "FAILED");
-  reportNow(msg);
+  report(msg);
   if (lightAReady) lightA.start(BH1750_QUALITY_HIGH2, BH1750_MTREG_DEFAULT);
 
-  // BH1750 Pot B — 0x23 (ADDR pin -> GND)
+  // BH1750 Pot B — 0x23 on Wire (ADDR pin -> GND)
   lightBReady = lightB.begin(BH1750_TO_GROUND, &Wire);
   snprintf(msg, sizeof(msg), "lightB (0x23): %s", lightBReady ? "OK" : "FAILED");
-  reportNow(msg);
+  report(msg);
   if (lightBReady) lightB.start(BH1750_QUALITY_HIGH2, BH1750_MTREG_DEFAULT);
 
   // Soil sensors — initial ADC diagnostic readings
   int rawA = analogRead(SOIL_PIN_A);
   float pctA = soilPct(SOIL_PIN_A);
   snprintf(msg, sizeof(msg), "soilA (A1) init: %.1f%% (raw %d)", pctA, rawA);
-  reportNow(msg);
+  report(msg);
 
   int rawB = analogRead(SOIL_PIN_B);
   float pctB = soilPct(SOIL_PIN_B);
   snprintf(msg, sizeof(msg), "soilB (A0) init: %.1f%% (raw %d)", pctB, rawB);
-  reportNow(msg);
+  report(msg);
 
   // Write CSV header only if this SD card doesn't already have a log on it.
-  // 2026-09-18: previously did sd.remove(LOG_FILENAME) unconditionally here
-  // ("fresh log each run") -- since this runs on every sketch restart, and
-  // session_log.jsonl (Python side) shows dozens of restarts across the real
-  // collection period, this card never actually held more than "since the
-  // last restart" despite being intended as a physically-removable backup of
-  // the full raw history (the whole reason it's on removable SD media
-  // instead of the board's soldered eMMC -- see
-  // docs/plan/board-disk-backup-routine.md for the corresponding Linux-side
-  // durability gap this mirrors). appendReadingToSD()'s sd.open(...,
-  // FILE_WRITE) already
-  // appends rather than overwrites for an existing file (standard SdFat/SD
-  // library FILE_WRITE semantics) -- the header-write path just needed the
-  // same "don't clobber what's already there" treatment.
-  //
-  // Known limitation, not fixed here: rows only carry millis()-since-boot,
-  // not a wall-clock timestamp, so recovering this file after a board
-  // failure tells you relative timing within each boot session but not
-  // calendar time -- cross-reference against the Python side's
-  // session_log.jsonl (which does have wall-clock session_start times) to
-  // anchor a given stretch of rows to an actual date/time.
-  reportNow("DEBUG: before sd.exists() check");  // TEMPORARY -- 2026-09-19 diagnostic, remove once resolved
+  // Using sd.open with FILE_WRITE and checking dataFile.size() == 0 avoids
+  // calling sd.exists() which can hang on some FAT cards/configurations.
   if (cardReady && (bmeAReady || bmeBReady)) {
-    reportNow("DEBUG: about to call sd.exists()");  // TEMPORARY
-    if (!sd.exists(LOG_FILENAME)) {
-      dataFile = sd.open(LOG_FILENAME, FILE_WRITE);
-      if (dataFile) {
+    dataFile = sd.open(LOG_FILENAME, FILE_WRITE);
+    if (dataFile) {
+      if (dataFile.size() == 0) {
         dataFile.println(
           "#,millis_ms,"
           "tempA_C,humA_pct,pressA_hPa,gasA_KOhm,"
           "tempB_C,humB_pct,pressB_hPa,gasB_KOhm,"
           "lightA_lux,lightB_lux,"
           "moistureA_pct,moistureB_pct");
-        dataFile.close();
-        reportNow("CSV header written — new sensor log started");
+        report("CSV header written — new sensor log started");
       } else {
-        reportNow("WARN: could not open file for CSV header");
+        report("Existing sensor_log.csv found on SD — appending across restart, not overwriting");
       }
+      dataFile.close();
     } else {
-      reportNow("Existing sensor_log.csv found on SD — appending across restart, not overwriting");
+      report("WARN: could not open file for CSV header");
     }
   }
-  reportNow("DEBUG: after sd.exists() block, about to set STREAMING");  // TEMPORARY
 
   state = STATE_STREAMING;
 }
@@ -390,14 +325,19 @@ void doStreamOneReading() {
     lightB.start(BH1750_QUALITY_HIGH2, BH1750_MTREG_DEFAULT);
   }
 
-  // Perform BME readings — skip individual sensor if it failed init or
-  // if performReading() times out this cycle. Zero-filled fields are clearly
-  // labelled in the CSV header; the Python side can detect offline sensors.
+  // Perform BME readings — if sensor is offline or times out, safely emit 0.0f
   bool readA = bmeAReady && bmeA.performReading();
   bool readB = bmeBReady && bmeB.performReading();
 
-  // Nothing to log if both sensors are offline — don't write empty rows.
-  if (!readA && !readB) return;
+  float tA = (bmeAReady && readA) ? bmeA.temperature              : 0.0f;
+  float hA = (bmeAReady && readA) ? bmeA.humidity                 : 0.0f;
+  float pA = (bmeAReady && readA) ? bmeA.pressure / 100.0f        : 0.0f;
+  float gA = (bmeAReady && readA) ? bmeA.gas_resistance / 1000.0f : 0.0f;
+
+  float tB = (bmeBReady && readB) ? bmeB.temperature              : 0.0f;
+  float hB = (bmeBReady && readB) ? bmeB.humidity                 : 0.0f;
+  float pB = (bmeBReady && readB) ? bmeB.pressure / 100.0f        : 0.0f;
+  float gB = (bmeBReady && readB) ? bmeB.gas_resistance / 1000.0f : 0.0f;
 
   sampleIndex++;
 
@@ -406,48 +346,35 @@ void doStreamOneReading() {
   float moistB = soilPct(SOIL_PIN_B);
 
   // SD card write (best-effort; a single missed write isn't fatal)
+  bool sdOk = false;
   if (cardReady) {
-    appendReadingToSD(sampleIndex, moistA, moistB);
+    sdOk = appendReadingToSD(sampleIndex, moistA, moistB, tA, hA, pA, gA, tB, hB, pB, gB);
   }
 
   // Bridge notification — parsed by KA-Edge-source/python/main.py
   char readingMsg[192];
-  buildReadingLine(readingMsg, sizeof(readingMsg), sampleIndex, moistA, moistB);
+  buildReadingLine(readingMsg, sizeof(readingMsg), sampleIndex, moistA, moistB, tA, hA, pA, gA, tB, hB, pB, gB);
   Bridge.notify("reading", readingMsg);
 
-  // SD free-space report — DISABLED 2026-08-15. Confirmed on real hardware:
-  // sd.vol()->freeClusterCount() (inside reportSdSpace()) took long enough
-  // to collapse the 1 Hz sampling loop to ~once/minute once it started
-  // firing, right around the first SD_SPACE_REPORT_INTERVAL_MS=60000
-  // threshold — exactly the risk flagged in reportSdSpace()'s comment when
-  // this was added, now confirmed rather than just suspected. Sampling
-  // integrity matters more than a live SD-space number this close to the
-  // 16-17 Aug trial data collection window. Re-enable only after timing
-  // freeClusterCount() in isolation and either finding it's fast enough or
-  // moving it off the 1 Hz hot path entirely.
-  // unsigned long nowMs = millis();
-  // if (cardReady && (nowMs - lastSdSpaceReportMs >= SD_SPACE_REPORT_INTERVAL_MS)) {
-  //   reportSdSpace();
-  //   lastSdSpaceReportMs = nowMs;
-  // }
-
-  // Human-readable debug line on the write_log channel
-  String dbg = "A[" + String(bmeA.temperature, 1) + "C " +
-               String(bmeA.humidity, 1) + "% " +
-               String(bmeA.pressure / 100.0, 0) + "hPa " +
-               String(bmeA.gas_resistance / 1000.0, 1) + "kΩ soil:" +
-               String(moistA, 1) + "% light:" + String(lastLuxA, 1) + "lx] | B[" +
-               String(bmeB.temperature, 1) + "C " +
-               String(bmeB.humidity, 1) + "% " +
-               String(bmeB.pressure / 100.0, 0) + "hPa " +
-               String(bmeB.gas_resistance / 1000.0, 1) + "kΩ soil:" +
-               String(moistB, 1) + "% light:" + String(lastLuxB, 1) + "lx] SD:" + (cardReady ? "OK" : "FAIL");
-  Bridge.notify("write_log", dbg.c_str());
+  // Human-readable debug line matching test-hardware diagnostic format
+  char dbg[220];
+  snprintf(dbg, sizeof(dbg),
+           "#%02d | A[%.1fC %.1f%% %.0fhPa %.1fkOhm soil:%.1f%% light:%.1flx] | B[%.1fC %.1f%% %.0fhPa %.1fkOhm soil:%.1f%% light:%.1flx] | SD:%s",
+           sampleIndex,
+           tA, hA, pA, gA, moistA, lastLuxA,
+           tB, hB, pB, gB, moistB, lastLuxB,
+           sdOk ? "OK" : (cardReady ? "FAIL" : "NO_CARD"));
+  Bridge.notify("write_log", dbg);
+  Bridge.notify("diag", dbg);
+  Bridge.update();
 }
 
 // ── Arduino entry points ──────────────────────────────────────────────────
 void setup() {
   Bridge.begin();
+  Wire.begin();
+  Wire1.begin();
+  SPI.begin();
 }
 
 void loop() {
@@ -460,12 +387,6 @@ void loop() {
     case STATE_STREAMING:
       doStreamOneReading();
       break;
-  }
-
-  // Flush any queued report messages (init diagnostics) to Bridge
-  if (reportCursor < reportCount) {
-    Bridge.notify("sd_status", reportLines[reportCursor]);
-    reportCursor++;
   }
 
   Bridge.update();

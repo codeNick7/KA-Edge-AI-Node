@@ -155,12 +155,16 @@ this determines what the board's push client has to do.
 
 Reusable as-is:
 - `source/edge_node/trained_model.py` — `trained_predict(rsmi, light_delta,
-  gas_index_trend, rsmi_trend) -> (flag, confidence)`, no runtime deps.
-- `source/dashboard/real_source.py`'s `_get_inference_locked` — the exact
-  feature/validity/inference pipeline per reading, already producing
-  `{timestamp, rsmi, light_delta, gas_index_trend, rsmi_trend, flag, confidence,
-  contributing_trend, model_version}` per PRD Section 7's evidence schema, just not
-  pushed anywhere yet.
+  gas_index_trend, rsmi_trend) -> (flag, confidence)`, no runtime deps. As of
+  2026-09-15 this is a compact transformer classifier
+  (`edge_node/tiny_transformer.py`), not the decision tree this doc originally
+  described — same call signature, so nothing downstream needed to change.
+- `scripts/inference_service.py`'s `PotService` — the exact feature/validity/inference
+  pipeline per reading (relocated 2026-09-15 from `real_source.py`'s old
+  `_get_inference_locked`, which no longer exists — `real_source.py` is now a pure
+  reader), already producing `{timestamp, rsmi, light_delta, gas_index_trend,
+  rsmi_trend, flag, confidence, contributing_trend, model_version}` per PRD Section 7's
+  evidence schema, just not pushed anywhere yet.
 
 Not yet built: anything that POSTs this record off-device. `KA-Edge-source/python/main.py`
 currently only writes to local JSONL files.
@@ -719,8 +723,10 @@ Updated evidence write path (supersedes the shorter 5-step list in §5.1):
   (`fetch_soil_evidence_history()`) only — it does not build a cloud-side model or
   algorithm that independently infers risk from the incoming time series (the kind
   of thing `pattern_detection`'s NDVI rolling-window algorithms do for satellite
-  data). The board's own trained decision tree remains the only AI inference in
-  this pipeline; the cloud only stores and displays what it already decided. A
+  data). The board's own trained model (a compact transformer classifier as of
+  2026-09-15, see `docs/model-choice-jury-justification.md`) remains the only AI
+  inference in this pipeline; the cloud only stores and displays what it already
+  decided. A
   cloud-side engine that re-analyzes the accumulated series for its own
   independent risk signals (e.g. a rolling RSMI trend detector feeding a new
   risk-taxonomy type, mirroring `pattern_detection/algorithms/rolling_ndvi.py`) is

@@ -151,4 +151,15 @@ if __name__ == "__main__":
     # use_reloader restarts the process on .py changes during iterative dev/demo
     # without debug=True's interactive debugger (which + host="0.0.0.0" would
     # expose remote code execution to anyone on the LAN).
-    app.run(host="0.0.0.0", port=8080, debug=False, use_reloader=True)
+    #
+    # threaded=True (2026-08-30): without it, Werkzeug's dev server handles
+    # ONE request at a time -- a slow request (e.g. /api/raw?range=today,
+    # which streams+scans the full growing JSONL file on disk, see
+    # real_source.py's _stream_decimated) blocked every other request,
+    # including the 5s live-tick poll and even the SAME page's own filter
+    # click, until it finished. On the board's slower ARM CPU against a
+    # multi-hour readings file this made "Today"/"Week" look like the whole
+    # dashboard had frozen, recoverable only by a hard page reload -- while
+    # "5m"/"1h"/"overall" (served from bounded in-memory caches, no disk
+    # scan) stayed fast and made it look like only those filters "worked".
+    app.run(host="0.0.0.0", port=8080, debug=False, use_reloader=True, threaded=True)

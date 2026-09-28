@@ -412,3 +412,34 @@ def test_iter_raw_export_rows_unknown_pot_raises(tmp_path):
         assert False, "expected ValueError for pot 'C'"
     except ValueError:
         pass
+
+
+def test_tiered_history_blended_into_overall_chart(tmp_path):
+    """Tiered historical readings (<7 days) must seamlessly merge with live readings for overall chart."""
+    db_path = _db(tmp_path)
+    now = datetime(2026, 9, 25, 12, 0, 0, tzinfo=timezone.utc)
+    old_ts_daily = (now - timedelta(days=25)).isoformat()
+    old_ts_hourly = (now - timedelta(days=12)).isoformat()
+    live_ts = (now - timedelta(days=2)).isoformat()
+
+    with board_db.connect(db_path) as conn:
+        # Insert historical tiered readings
+        conn.execute("""
+        INSERT INTO readings_tiered (pot_id, tier, sample_index, millis_ms, temp_c, humidity_pct, pressure_hpa, gas_kohm, light_lux, moisture_pct, received_at)
+        VALUES ('A', 'daily', 1, 1000, 22.0, 50.0, 1013.0, 10.0, 400.0, 5.0, ?),
+               ('A', 'hourly', 2, 2000, 24.0, 50.0, 1013.0, 15.0, 400.0, 6.0, ?)
+        """, (old_ts_daily, old_ts_hourly))
+
+        # Insert live readings
+        board_db.insert_reading(conn, "A", {
+            "sample_index": 3, "millis_ms": 3000, "temp_c": 26.0, "humidity_pct": 50.0,
+            "pressure_hpa": 1013.0, "gas_kohm": 20.0, "light_lux": 400.0, "moisture_pct": 7.0,
+            "received_at": live_ts,
+        })
+
+    source = RealDataSource(db_path=db_path)
+    rows = source.get_raw("A", 0)
+    assert len(rows) == 3
+    assert [r["temp_c"] for r in rows] == [22.0, 24.0, 26.0]
+    assert [r["timestamp"] for r in rows] == [old_ts_daily, old_ts_hourly, live_ts]
+

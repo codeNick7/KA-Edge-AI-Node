@@ -1,0 +1,10 @@
+# Minimal runtime dependencies for the board (dashboard + inference_service.py).
+# Deliberately NOT the same as the top-level requirements.txt: nothing the board
+# actually runs (dashboard/app.py, dashboard/real_source.py, dashboard/mock_source.py,
+# edge_node/{features,validity,texture_table,decision_tree,trained_model}.py,
+# scripts/inference_service.py) imports numpy/scipy/scikit-learn -- those are only
+# needed on the dev machine for training (source/edge_node/train.py, tiny_transformer.py)
+# and are deliberately excluded from what scripts/deploy_dashboard_to_board.sh copies,
+# per the architecture doc's "dependency-free, years of unattended operation" design
+# (Section 9).
+flask

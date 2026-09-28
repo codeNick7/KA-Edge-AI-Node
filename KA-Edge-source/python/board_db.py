@@ -71,6 +71,15 @@ CREATE TABLE IF NOT EXISTS inference_results (
     model_version TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_inference_pot_ts ON inference_results(pot_id, timestamp);
+-- Added 2026-09-25 after a real incident: two inference_service.py --watch processes
+-- briefly ran concurrently against the same db (a manual restart mistake, not expected
+-- in normal operation), both independently backfilling from the same stale resume
+-- pointer and both inserting results for the same readings -- ~30,829 duplicate rows
+-- for one pot, no error, no crash, since nothing prevented it at the DB level. This
+-- index makes that structurally impossible going forward (paired with
+-- insert_inference_result's INSERT OR IGNORE below) instead of relying on "don't
+-- accidentally start it twice."
+CREATE UNIQUE INDEX IF NOT EXISTS ux_inference_pot_ts ON inference_results(pot_id, timestamp);
 
 CREATE TABLE IF NOT EXISTS raw_daily_rollup (
     pot_id TEXT NOT NULL, date TEXT NOT NULL,
@@ -93,6 +102,38 @@ CREATE TABLE IF NOT EXISTS inference_daily_rollup (
     first_ts TEXT, last_ts TEXT,
     PRIMARY KEY (pot_id, date)
 );
+
+CREATE TABLE IF NOT EXISTS readings_tiered (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pot_id TEXT NOT NULL,
+    tier TEXT NOT NULL,
+    sample_index INTEGER NOT NULL,
+    millis_ms INTEGER NOT NULL,
+    temp_c REAL NOT NULL,
+    humidity_pct REAL NOT NULL,
+    pressure_hpa REAL NOT NULL,
+    gas_kohm REAL NOT NULL,
+    light_lux REAL NOT NULL,
+    moisture_pct REAL NOT NULL,
+    received_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_readings_tiered_pot_ts ON readings_tiered(pot_id, received_at);
+
+CREATE TABLE IF NOT EXISTS inference_tiered (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pot_id TEXT NOT NULL,
+    tier TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    rsmi REAL NOT NULL,
+    light_delta REAL NOT NULL,
+    gas_index_trend REAL NOT NULL,
+    rsmi_trend REAL NOT NULL,
+    flag TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    contributing_trend TEXT NOT NULL,
+    model_version TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_inference_tiered_pot_ts ON inference_tiered(pot_id, timestamp);
 """
 
 
@@ -151,9 +192,15 @@ def insert_reading(conn: sqlite3.Connection, pot_id: str, rec: dict) -> int:
 def insert_inference_result(conn: sqlite3.Connection, pot_id: str, reading_id: int | None, result: dict) -> int:
     """result: {timestamp, rsmi, light_delta, gas_index_trend, rsmi_trend, flag,
     confidence, contributing_trend, model_version} -- same shape
-    scripts/inference_service.py's _compute_inference_row already produces."""
+    scripts/inference_service.py's _compute_inference_row already produces.
+
+    INSERT OR IGNORE (2026-09-25, see ux_inference_pot_ts's comment in _SCHEMA): a
+    (pot_id, timestamp) that's already present is a silent no-op instead of a
+    UNIQUE-constraint IntegrityError -- makes a duplicate write (e.g. two
+    inference_service.py --watch processes briefly running against the same db)
+    harmless instead of something a caller has to catch."""
     cursor = conn.execute(
-        "INSERT INTO inference_results (pot_id, reading_id, timestamp, rsmi, light_delta, "
+        "INSERT OR IGNORE INTO inference_results (pot_id, reading_id, timestamp, rsmi, light_delta, "
         "gas_index_trend, rsmi_trend, flag, confidence, contributing_trend, model_version) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
@@ -267,6 +314,106 @@ def _rollup_inference_day(conn: sqlite3.Connection, pot_id: str, date: str) -> N
     )
 
 
+# Two-tier chart history (2026-09-28: rolled back the daily-compaction tier that
+# confirmed 2026-09-25's 3-tier design added -- collapsing to 1 point/day past 20 days
+# flattened daily trend variation out of week/overall charts. Archived history now stays
+# hourly indefinitely instead of compacting further):
+#   Tier 1 (<= RETENTION_DAYS=7 days old): live 1Hz per-second readings -- the `readings`/
+#                                           `inference_results` tables, untouched by this.
+#   Tier 2 (> RETENTION_DAYS days old): hourly, non-outlier points -- readings_tiered/
+#                                           inference_tiered, tier='hourly', kept forever.
+# "Non-outlier" representative = the bucket's real row whose value is closest to that
+# bucket's median (median-of-real-samples, not a synthetic mean) for the metric that most
+# drives each table's chart (moisture_pct for readings, rsmi for inference_results) -- a
+# single spurious spike/dropout landing in a bucket won't get chosen as that bucket's
+# representative point.
+TIER_HOURLY = "hourly"
+
+_RAW_TIER_COLS = (
+    "sample_index", "millis_ms", "temp_c", "humidity_pct", "pressure_hpa",
+    "gas_kohm", "light_lux", "moisture_pct", "received_at",
+)
+_RAW_TIER_VALUE_IDX = _RAW_TIER_COLS.index("moisture_pct")
+_RAW_TIER_TS_IDX = _RAW_TIER_COLS.index("received_at")
+
+_INF_TIER_COLS = (
+    "timestamp", "rsmi", "light_delta", "gas_index_trend", "rsmi_trend",
+    "flag", "confidence", "contributing_trend", "model_version",
+)
+_INF_TIER_VALUE_IDX = _INF_TIER_COLS.index("rsmi")
+_INF_TIER_TS_IDX = _INF_TIER_COLS.index("timestamp")
+
+
+def _parse_iso(ts: str):
+    try:
+        return datetime.fromisoformat(ts)
+    except (TypeError, ValueError):
+        return None
+
+
+def _bucket_key(ts: str, granularity: str) -> str | None:
+    dt = _parse_iso(ts)
+    if dt is None:
+        return None
+    if granularity == "hour":
+        return dt.replace(minute=0, second=0, microsecond=0).isoformat()
+    return dt.strftime("%Y-%m-%d")  # "day"
+
+
+def _pick_non_outlier(rows: list, value_idx: int) -> tuple:
+    """The real row in `rows` whose value_idx field is closest to the group's median --
+    a representative, non-synthetic sample robust to a single outlier landing in the
+    bucket (ties broken by earliest timestamp, via stable sort order of `rows`)."""
+    values = sorted(r[value_idx] for r in rows)
+    n = len(values)
+    median = values[n // 2] if n % 2 else (values[n // 2 - 1] + values[n // 2]) / 2
+    return min(rows, key=lambda r: abs(r[value_idx] - median))
+
+
+def _bucket_and_pick(rows: list, ts_idx: int, value_idx: int, granularity: str) -> list:
+    buckets: dict[str, list] = {}
+    for r in rows:
+        key = _bucket_key(r[ts_idx], granularity)
+        if key is not None:
+            buckets.setdefault(key, []).append(r)
+    return [_pick_non_outlier(group, value_idx) for group in buckets.values()]
+
+
+def _archive_raw_day(conn: sqlite3.Connection, pot_id: str, date: str) -> None:
+    """Tier 1 -> Tier 2: copy one non-outlier row per hour for (pot_id, date) into
+    readings_tiered (tier='hourly') before prune_old() deletes this day from the live
+    `readings` table -- so week/overall charts keep a continuous, if coarser, line past
+    RETENTION_DAYS instead of a hard gap."""
+    rows = conn.execute(
+        f"SELECT {', '.join(_RAW_TIER_COLS)} FROM readings "
+        "WHERE pot_id = ? AND substr(received_at, 1, 10) = ?",
+        (pot_id, date),
+    ).fetchall()
+    kept = _bucket_and_pick(rows, _RAW_TIER_TS_IDX, _RAW_TIER_VALUE_IDX, "hour")
+    if kept:
+        conn.executemany(
+            f"INSERT INTO readings_tiered (pot_id, tier, {', '.join(_RAW_TIER_COLS)}) "
+            f"VALUES (?, ?, {', '.join('?' * len(_RAW_TIER_COLS))})",
+            [(pot_id, TIER_HOURLY, *r) for r in kept],
+        )
+
+
+def _archive_inference_day(conn: sqlite3.Connection, pot_id: str, date: str) -> None:
+    """Same Tier 1 -> Tier 2 hourly archiving as _archive_raw_day, over inference_results."""
+    rows = conn.execute(
+        f"SELECT {', '.join(_INF_TIER_COLS)} FROM inference_results "
+        "WHERE pot_id = ? AND substr(timestamp, 1, 10) = ?",
+        (pot_id, date),
+    ).fetchall()
+    kept = _bucket_and_pick(rows, _INF_TIER_TS_IDX, _INF_TIER_VALUE_IDX, "hour")
+    if kept:
+        conn.executemany(
+            f"INSERT INTO inference_tiered (pot_id, tier, {', '.join(_INF_TIER_COLS)}) "
+            f"VALUES (?, ?, {', '.join('?' * len(_INF_TIER_COLS))})",
+            [(pot_id, TIER_HOURLY, *r) for r in kept],
+        )
+
+
 def prune_old(conn: sqlite3.Connection, retention_days: int = RETENTION_DAYS,
               hard_cap_days: int | None = None) -> dict:
     """Roll every full day older than retention_days into the permanent rollup
@@ -319,13 +466,23 @@ def prune_old(conn: sqlite3.Connection, retention_days: int = RETENTION_DAYS,
             if unprocessed and date >= hard_cutoff_date:
                 protected_dates.append((pot_id, date, unprocessed))
                 continue
+            # Archive a downsampled per-point series into readings_tiered *before* this
+            # day's full-resolution rows are deleted -- otherwise week/overall charts
+            # lose this day's history entirely rather than just losing resolution (see
+            # docs/plan/sqlite-storage-migration.md's Phase-2 follow-up).
+            _archive_raw_day(conn, pot_id, date)
             deleted_readings += conn.execute(
                 "DELETE FROM readings WHERE pot_id = ? AND substr(received_at,1,10) = ?", (pot_id, date)
             ).rowcount
 
+    for pot_id in inf_pots:
+        for date in inf_dates:
+            _archive_inference_day(conn, pot_id, date)
+
     deleted_inference = conn.execute(
         "DELETE FROM inference_results WHERE substr(timestamp,1,10) < ?", (cutoff_date,)).rowcount
     conn.commit()
+
     conn.execute("PRAGMA incremental_vacuum")
     return {
         "cutoff_date": cutoff_date, "deleted_readings": deleted_readings, "deleted_inference": deleted_inference,

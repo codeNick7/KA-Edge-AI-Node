@@ -20,8 +20,11 @@ BH1750 ambient-light sensor. The pipeline runs in four on-device stages:
    continuously to a microSD card.
 2. **Reason** — the QRB2210 Linux domain converts raw readings into soil-type-
    agnostic relative features (RSMI, light delta, gas-index trend).
-3. **Detect** — a trained decision tree (scikit-learn, max_depth=5) classifies
-   soil-moisture state with a confidence score.
+3. **Detect** — a compact trained transformer classifier (1 self-attention block,
+   1,155 parameters, exported to dependency-free pure Python) classifies soil-moisture
+   state with a confidence score. A standalone background routine
+   (`scripts/inference_service.py`) computes this continuously; the dashboard only
+   reads the results, it never runs the model itself.
 4. **Synchronize** — HMAC-signed evidence records are queued in a durable local
    store and pushed to the Karbon-Assure ingestion API, with automatic retry on
    failure.
@@ -33,18 +36,32 @@ See `docs/karbon-assure-edge-node-system-architecture.md` and
 
 - `KA-Edge-source/` — board code that runs on the Arduino UNO Q
   - `sketch/sketch.ino` — STM32 real-time firmware (sensor polling, SD logging)
-  - `python/main.py` — Linux-side app (feature extraction, inference, evidence sync)
-  - `python/edge_node/` — feature computation, validity checks, trained decision tree
+  - `python/main.py` — Linux-side app (feature extraction, evidence sync to the cloud)
+  - `python/edge_node/` — feature computation, validity checks, the trained model
+    (`trained_model.py`, dependency-free — see below)
   - `python/push_to_karbon_assure.py`, `sync_queue.py` — HMAC-signed sync with a durable local queue
-- `source/dashboard/` — Flask dashboard for live/raw sensor views and inference results
-- `source/edge_node/` — decision-tree training code (`train.py`) and offline validation
+- `source/dashboard/` — Flask dashboard for live/raw sensor views and inference results;
+  a pure reader of the inference sidecar, computes nothing itself
+- `source/edge_node/` — model training/export code (`tiny_transformer.py`,
+  `export_transformer.py`, plus the legacy decision-tree tooling `train.py`/`export.py`/
+  `decision_tree.py`) and offline validation — dev-machine only, not deployed to the board
+  (`trained_model.py` is the one generated file both sides share)
 - `source/cloud_mock/` — mock cloud-side demo UI
 - `source/tests/` — test suite (pytest)
-- `scripts/` — one-off data-migration and deploy scripts (e.g. `deploy_edge_node_to_board.sh`)
+- `scripts/` — training (`train_transformer.py`, `build_training_set.py`), the standalone
+  background inference routine (`inference_service.py`), data-migration, and deploy scripts
+  (e.g. `deploy_edge_node_to_board.sh`, `deploy_dashboard_to_board.sh`)
 - `docs/` — architecture, PRD, BOM, citations, execution plan
 - `demo/` — contest report, abstract, and presentation decks
 
 ## Running the dashboard
+
+The dashboard only reads inference results — start the background inference service
+first (or at least once, to populate the sidecar) so there's something to show:
+
+```bash
+.venv/bin/python scripts/inference_service.py --data-dir <dir-containing-sensor_data.db> --watch
+```
 
 ```bash
 .venv/bin/python -m flask --app source.dashboard.app run --host 0.0.0.0 --port 8080

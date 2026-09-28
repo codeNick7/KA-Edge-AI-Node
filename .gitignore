@@ -5,6 +5,7 @@ __pycache__/
 .DS_Store
 .env
 mock-data/
+.playwright-mcp/
 
 # Raw sensor data dumps / exports -- not source, regenerable from hardware
 data-from-board/

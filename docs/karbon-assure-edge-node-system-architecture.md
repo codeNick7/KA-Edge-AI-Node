@@ -23,12 +23,12 @@ Every architectural choice in this document should trace back to one of three be
 
 The system leverages the hybrid compute structure of the **Arduino UNO Q** — offloading real-time sensor polling to its STM32U585 microcontroller (Zephyr RTOS) while running high-level inference, local SQLite storage, and network synchronization on its Qualcomm QRB2210 application processor (Debian Linux). Naming the board and this split explicitly, up front, is deliberate — it's the single hardware decision the rest of this document depends on.
 
-A fair question a reviewer could ask: if the model is just a decision tree, why run Linux at all — why not do everything on the STM32?
+A fair question a reviewer could ask: if the model is just a small on-device classifier, why run Linux at all — why not do everything on the STM32?
 
 The answer is that the two processors are solving different problems, and conflating them would weaken both:
 
 - **Deterministic acquisition belongs on the MCU.** Sensor polling, timing, and watchdog behavior need predictable, real-time execution — the STM32U585 (Cortex-M33, running Zephyr) is built for exactly this, and it's not something you want sharing a scheduler with a general-purpose OS.
-- **AI workloads evolve; MCUs don't have room for that evolution.** Today's model is a shallow decision tree. Next season's might need a slightly larger model, a different feature set, or an updated threshold table. That evolution needs a real filesystem, a real package/dependency environment, and enough RAM/storage headroom to iterate — none of which a microcontroller offers.
+- **AI workloads evolve; MCUs don't have room for that evolution.** The model has already evolved once inside this project — from a shallow decision tree to a compact transformer classifier (see `docs/model-choice-jury-justification.md`) — and may again. That evolution needs a real filesystem, a real package/dependency environment, and enough RAM/storage headroom to iterate — none of which a microcontroller offers.
 - **Linux is what makes the rest of the system possible, not just the model:** OTA updates (pulling a new model or software version without reflashing hardware), durable local storage (SQLite, proper filesystems), real networking (WiFi stack, retry/backoff logic, TLS later), and diagnostics (logging, remote debugging) all assume an OS underneath them. Trying to build these on bare metal is possible but is reinventing what Linux already gives you for free.
 - **The QRB2210 specifically** brings a quad-core Cortex-A53 application processor with GPU/DSP blocks intended for on-device AI/vision/audio — meaning the compute headroom for a more sophisticated model later already exists in the hardware, without a board change.
 
@@ -39,7 +39,7 @@ Put simply: the STM32 exists so sensing is never late or jittery; Linux exists s
 ## 3. What This Prototype Can Do (in scope)
 
 - Read moisture, gas/VOC index, temperature, and light continuously via the STM32 real-time side.
-- Run on-device feature engineering (RSMI, gas index, light_delta) and a trained decision tree on the Linux side.
+- Run on-device feature engineering (RSMI, gas index, light_delta) and a trained model (compact transformer classifier) on the Linux side.
 - Detect two classes of on-site anomaly: **sensor faults** (validity gate) and **field-condition anomalies** (drought onset, waterlogging, activity degrading), each with a confidence score.
 - Buffer all readings and flags locally when the network is unavailable, and resume upload without gaps or duplication once it returns.
 - Provide two independent output paths: a **semantic flag stream** (primary, small, prioritized) and a **raw data feed** (secondary, backup, opportunistic).
@@ -77,7 +77,7 @@ Naming these boundaries explicitly in your contest documentation is a strength, 
 │                          Qualcomm QRB2210 / Debian Linux                             │
 │                          ├─ Feature engineering (RSMI, gas index, light_delta)       │
 │                          ├─ Validity gate (sensor fault detection)                   │
-│                          ├─ Trend/anomaly model (decision tree, rolling baseline)    │
+│                          ├─ Trend/anomaly model (transformer, rolling baseline)      │
 │                          ├─ Evidence builder (hash + timestamp + model version)      │
 │                          ├─ Local append-only store (readings + flags, durable)      │
 │                          └─ Sync manager (queue, backoff, dedup by local ID)         │
@@ -126,7 +126,7 @@ This deserves its own section because it's the one dependency everything else �
 |---|---|---|
 | Sensor read latency (MCU) | < 50 ms per cycle | Target |
 | RPC round-trip (MCU ↔ Linux) | < 100 ms | Target |
-| Inference time (decision tree) | < 50 ms | Target — trivial for a shallow tree, should be confirmed rather than assumed |
+| Inference time (transformer classifier) | < 50 ms | Target — trivial at 1,155 parameters, should be confirmed rather than assumed |
 | Cold boot to monitoring-ready | < 30 s | Target |
 | Storage growth rate | ~58 KB/day at one reading/5 min, ~200 bytes/record | Derived estimate, not yet measured against real record size |
 | Onboard buffering headroom | Multiple years at the above rate before 16GB fills | Derived estimate |
@@ -148,7 +148,7 @@ Sensor reading (tagged with pot_id: A/B)
 Feature extraction (RSMI, gas index, light_delta)
    │
    v
-Inference (decision tree + confidence score, model version recorded)
+Inference (transformer classifier + confidence score, model version recorded)
    │
    v
 Hash (record content → hash; includes previous record's hash, forming a chain — per pot_id)
@@ -290,8 +290,8 @@ flowchart TD
 Designed so each of these is an *addition*, not a redesign:
 
 - **Sensors as pluggable feature providers**: adding real soil EC, pH, or a low-cost NIR module later means adding a feature provider, not restructuring the pipeline.
-- **OTA model updates**: an improved decision tree can be pushed to already-deployed nodes without touching hardware — recorded against the model-version field in the Evidence Pipeline.
-- **GenAI / local SLM upgrade path**: because inference already runs in the QRB2210's Linux environment rather than on the MCU, the shallow decision tree can later be swapped for a lightweight, quantized local small language model (SLM) — e.g. for richer natural-language anomaly summaries or reasoning over multi-sensor context — without any hardware change. This is the same split-compute advantage from Section 2 applied forward: today's model is intentionally simple, but the compute headroom for local GenAI already exists in the board.
+- **OTA model updates**: an improved model can be pushed to already-deployed nodes without touching hardware — recorded against the model-version field in the Evidence Pipeline.
+- **GenAI / local SLM upgrade path**: because inference already runs in the QRB2210's Linux environment rather than on the MCU, the current compact transformer classifier can later be scaled up into a lightweight, quantized local small language model (SLM) — e.g. for richer natural-language anomaly summaries or reasoning over multi-sensor context — without any hardware change. This is the same split-compute advantage from Section 2 applied forward: today's model is intentionally small, but the compute headroom for local GenAI already exists in the board.
 - **Fleet management**: node IDs, per-node health dashboards, and centralized model versioning are a natural extension of the existing sync manager.
 - **Federated model improvement**: individual nodes tune their own baseline locally; Karbon Assure's cloud aggregates patterns across sites to improve a shared model, then pushes refinements back down.
 - **Communication backhaul swap**: LoRa, cellular, or satellite backhaul can be swapped in per site without touching inference or storage.
@@ -305,7 +305,7 @@ Designed so each of these is an *addition*, not a redesign:
 
 - **Seasonal drift detection**: compare live baseline statistics to the training baseline; flag significant divergence rather than letting a stale model silently degrade year over year.
 - **Field maintenance**: swappable sensors, a field-replaceable-parts list, and a defined cleaning/replacement schedule for probes exposed to soil.
-- **Model training pipeline**: a defined process for retraining/updating the decision tree as more trial data (and eventually multi-site data) becomes available, with each version recorded in the Evidence Pipeline.
+- **Model training pipeline**: a defined process for retraining/updating the trained model as more trial data (and eventually multi-site data) becomes available, with each version recorded in the Evidence Pipeline.
 - **Multi-soil-type calibration**: extending the RSMI texture-table approach with validated thresholds per soil type, not just the one local trial.
 - **Security hardening**: encrypted transport and device authentication, once the core evidence/resilience architecture is proven.
 

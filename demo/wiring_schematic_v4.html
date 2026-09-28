@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { margin:0; padding:24px; background:#fafaf8; font-family: -apple-system, "Segoe UI", sans-serif; }
+  .wrap { max-width: 1300px; margin: 0 auto; }
+  h2 { font-size:16px; font-weight:600; color:#222; margin:0 0 4px; }
+  p.sub { font-size:13px; color:#666; margin:0 0 16px; }
+  .legend { display:flex; gap:18px; flex-wrap:wrap; font-size:12px; color:#333; margin-top:14px; padding:10px 14px; background:#fff; border:1px solid #ddd; border-radius:8px;}
+  .legend span { display:inline-flex; align-items:center; gap:6px; }
+  .swatch { width:16px; height:4px; border-radius:2px; display:inline-block; }
+  .note { font-size:12px; color:#555; background:#fff8e6; border:1px solid #f0d78c; border-radius:8px; padding:10px 14px; margin-top:14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<h2>Garden sensor node — UNO Q wiring schematic (v4)</h2>
+<p class="sub">Soil sensors are powered at 3.3V, SIG wired directly to the analog pin — no divider resistors in this build. Only the SD card module runs on the 5V rail.</p>
+
+<svg width="100%" viewBox="0 0 1300 800" xmlns="http://www.w3.org/2000/svg">
+  <rect x="0" y="0" width="1300" height="800" fill="#ffffff" stroke="#e2e2dc" rx="10"/>
+
+  <!-- UNO Q board -->
+  <rect x="30" y="150" width="190" height="460" rx="10" fill="#eef2fb" stroke="#5c7cbf" stroke-width="1.5"/>
+  <text x="125" y="178" text-anchor="middle" font-size="14" font-weight="600" fill="#1f3a66">Arduino UNO Q</text>
+  <text x="125" y="196" text-anchor="middle" font-size="11" fill="#4a5b7a">STM32 + Linux/Qualcomm</text>
+
+  <!-- Qwiic port -->
+  <rect x="80" y="215" width="90" height="20" rx="3" fill="#dfe6f2" stroke="#1f6feb"/>
+  <text x="125" y="229" text-anchor="middle" font-size="11" fill="#0d3a80">Qwiic port</text>
+
+  <!-- header pins (Wire bus, for BH1750 later) -->
+  <circle cx="215" cy="270" r="4" fill="#c0392b"/>
+  <text x="198" y="266" text-anchor="end" font-size="12" fill="#333">3V3</text>
+  <circle cx="215" cy="300" r="4" fill="#333"/>
+  <text x="198" y="296" text-anchor="end" font-size="12" fill="#333">GND</text>
+  <circle cx="215" cy="330" r="4" fill="#c99a1e"/>
+  <text x="198" y="326" text-anchor="end" font-size="12" fill="#333">SDA (header)</text>
+  <circle cx="215" cy="360" r="4" fill="#2e8b57"/>
+  <text x="198" y="356" text-anchor="end" font-size="12" fill="#333">SCL (header)</text>
+
+  <!-- 5V pin -->
+  <circle cx="215" cy="400" r="4" fill="#b5651d"/>
+  <text x="198" y="396" text-anchor="end" font-size="12" fill="#333">5V</text>
+
+  <!-- analog pins -->
+  <circle cx="215" cy="435" r="4" fill="#8e44ad"/>
+  <text x="198" y="431" text-anchor="end" font-size="12" fill="#333">A0</text>
+  <circle cx="215" cy="465" r="4" fill="#8e44ad"/>
+  <text x="198" y="461" text-anchor="end" font-size="12" fill="#333">A1</text>
+
+  <!-- SPI pins -->
+  <circle cx="215" cy="505" r="4" fill="#1f6feb"/>
+  <text x="198" y="501" text-anchor="end" font-size="12" fill="#333">D10 (CS)</text>
+  <circle cx="215" cy="535" r="4" fill="#1f6feb"/>
+  <text x="198" y="531" text-anchor="end" font-size="12" fill="#333">D11 (MOSI)</text>
+  <circle cx="215" cy="565" r="4" fill="#1f6feb"/>
+  <text x="198" y="561" text-anchor="end" font-size="12" fill="#333">D12 (MISO)</text>
+  <circle cx="215" cy="595" r="4" fill="#1f6feb"/>
+  <text x="198" y="591" text-anchor="end" font-size="12" fill="#333">D13 (SCK)</text>
+
+  <!-- ===== Qwiic BME688 chain ===== -->
+  <text x="260" y="120" font-size="12" font-weight="600" fill="#333">Qwiic chain — daisy-chained, no breadboard</text>
+  <path d="M170 225 C 220 225, 250 140, 300 140" fill="none" stroke="#1f6feb" stroke-width="2.5"/>
+  <rect x="300" y="110" width="150" height="60" rx="6" fill="#e8f0fd" stroke="#1f6feb" stroke-width="1.2"/>
+  <text x="375" y="132" text-anchor="middle" font-size="12" font-weight="600" fill="#0d3a80">BME688 #1</text>
+  <text x="375" y="147" text-anchor="middle" font-size="11" fill="#0d3a80">addr 0x76 · Qwiic in</text>
+  <text x="375" y="161" text-anchor="middle" font-size="10" fill="#2255a3">4-pin JST, plug-and-play</text>
+
+  <path d="M450 140 H 520" fill="none" stroke="#1f6feb" stroke-width="2.5"/>
+  <rect x="520" y="110" width="150" height="60" rx="6" fill="#e8f0fd" stroke="#1f6feb" stroke-width="1.2"/>
+  <text x="595" y="132" text-anchor="middle" font-size="12" font-weight="600" fill="#0d3a80">BME688 #2</text>
+  <text x="595" y="147" text-anchor="middle" font-size="11" fill="#0d3a80">addr 0x77 · Qwiic out</text>
+  <text x="595" y="161" text-anchor="middle" font-size="10" fill="#2255a3">chained off BME688 #1</text>
+
+  <!-- ===== Shared breadboard rails ===== -->
+  <text x="260" y="255" font-size="12" font-weight="600" fill="#333">Shared breadboard rails</text>
+
+  <line x1="215" y1="270" x2="1150" y2="270" stroke="#c0392b" stroke-width="2.5"/>
+  <text x="1050" y="262" font-size="11" fill="#c0392b">+3.3V rail</text>
+
+  <line x1="215" y1="300" x2="1150" y2="300" stroke="#333" stroke-width="2.5"/>
+  <text x="1050" y="292" font-size="11" fill="#333">GND rail</text>
+
+  <line x1="215" y1="330" x2="700" y2="330" stroke="#c99a1e" stroke-width="2.5"/>
+  <text x="240" y="322" font-size="11" fill="#c99a1e">SDA bus (I2C data) — for BH1750 pair</text>
+
+  <line x1="215" y1="360" x2="700" y2="360" stroke="#2e8b57" stroke-width="2.5"/>
+  <text x="240" y="352" font-size="11" fill="#2e8b57">SCL bus (I2C clock) — for BH1750 pair</text>
+
+  <line x1="215" y1="400" x2="500" y2="400" stroke="#b5651d" stroke-width="2.5"/>
+  <text x="330" y="392" font-size="11" fill="#b5651d">+5V rail (SD card module only)</text>
+
+  <!-- ===== BH1750 #1 — Pot A, wired & active ===== -->
+  <g>
+    <rect x="280" y="420" width="150" height="65" rx="6" fill="#f4f1fb" stroke="#7f6bb3" stroke-width="1.2"/>
+    <text x="355" y="440" text-anchor="middle" font-size="12" font-weight="600" fill="#453575">BH1750 #1</text>
+    <text x="355" y="455" text-anchor="middle" font-size="11" fill="#453575">addr 0x5C (ADDR→VCC) · Wire bus</text>
+    <text x="355" y="470" text-anchor="middle" font-size="10" fill="#5f4c92">wired &amp; active</text>
+    <line x1="295" y1="420" x2="295" y2="270" stroke="#c0392b" stroke-width="1.2"/>
+    <line x1="315" y1="420" x2="315" y2="300" stroke="#333" stroke-width="1.2"/>
+    <line x1="335" y1="420" x2="335" y2="330" stroke="#c99a1e" stroke-width="1.2"/>
+    <line x1="355" y1="420" x2="355" y2="360" stroke="#2e8b57" stroke-width="1.2"/>
+  </g>
+
+  <!-- ===== BH1750 #2 — Pot B, wired & active ===== -->
+  <g>
+    <rect x="470" y="420" width="150" height="65" rx="6" fill="#f4f1fb" stroke="#7f6bb3" stroke-width="1.2"/>
+    <text x="545" y="440" text-anchor="middle" font-size="12" font-weight="600" fill="#453575">BH1750 #2</text>
+    <text x="545" y="455" text-anchor="middle" font-size="11" fill="#453575">addr 0x23 (ADDR→GND) · Wire bus</text>
+    <text x="545" y="470" text-anchor="middle" font-size="10" fill="#5f4c92">wired &amp; active</text>
+    <line x1="485" y1="420" x2="485" y2="270" stroke="#c0392b" stroke-width="1.2"/>
+    <line x1="505" y1="420" x2="505" y2="300" stroke="#333" stroke-width="1.2"/>
+    <line x1="525" y1="420" x2="525" y2="330" stroke="#c99a1e" stroke-width="1.2"/>
+    <line x1="545" y1="420" x2="545" y2="360" stroke="#2e8b57" stroke-width="1.2"/>
+  </g>
+
+  <!-- ===== Soil sensor #1 — Pot A, direct to A1, no divider ===== -->
+  <g>
+    <rect x="700" y="420" width="150" height="65" rx="6" fill="#eaf4ea" stroke="#3f8a4c" stroke-width="1.2"/>
+    <text x="775" y="440" text-anchor="middle" font-size="12" font-weight="600" fill="#1f5c2b">Soil sensor #1</text>
+    <text x="775" y="455" text-anchor="middle" font-size="11" fill="#1f5c2b">analog · pot A</text>
+    <text x="775" y="470" text-anchor="middle" font-size="10" fill="#2f7a3d">powered at 3.3V</text>
+    <line x1="715" y1="420" x2="715" y2="270" stroke="#c0392b" stroke-width="1.2"/>
+    <line x1="735" y1="420" x2="735" y2="300" stroke="#333" stroke-width="1.2"/>
+  </g>
+  <text x="800" y="502" font-size="9" fill="#8e44ad">SIG (no divider)</text>
+  <path d="M775 485 H 900 V 745 H 215 V 745" fill="none" stroke="#8e44ad" stroke-width="1.4"/>
+  <text x="225" y="741" font-size="10" fill="#8e44ad">to A1</text>
+
+  <!-- ===== Soil sensor #2 — Pot B, direct to A0, no divider ===== -->
+  <g>
+    <rect x="900" y="420" width="150" height="65" rx="6" fill="#eaf4ea" stroke="#3f8a4c" stroke-width="1.2"/>
+    <text x="975" y="440" text-anchor="middle" font-size="12" font-weight="600" fill="#1f5c2b">Soil sensor #2</text>
+    <text x="975" y="455" text-anchor="middle" font-size="11" fill="#1f5c2b">analog · pot B</text>
+    <text x="975" y="470" text-anchor="middle" font-size="10" fill="#2f7a3d">powered at 3.3V</text>
+    <line x1="915" y1="420" x2="915" y2="270" stroke="#c0392b" stroke-width="1.2"/>
+    <line x1="935" y1="420" x2="935" y2="300" stroke="#333" stroke-width="1.2"/>
+  </g>
+  <text x="1000" y="502" font-size="9" fill="#8e44ad">SIG (no divider)</text>
+  <path d="M975 485 H 1100 V 765 H 215 V 765" fill="none" stroke="#8e44ad" stroke-width="1.4"/>
+  <text x="225" y="761" font-size="10" fill="#8e44ad">to A0</text>
+
+  <!-- ===== SD card module ===== -->
+  <text x="260" y="500" font-size="12" font-weight="600" fill="#333">SD card module — dedicated SPI wires</text>
+  <rect x="280" y="620" width="200" height="110" rx="6" fill="#eaf1fb" stroke="#1f6feb" stroke-width="1.2"/>
+  <text x="380" y="642" text-anchor="middle" font-size="12" font-weight="600" fill="#0d3a80">SD card breakout (SPI)</text>
+  <text x="380" y="658" text-anchor="middle" font-size="10" fill="#2255a3">VCC → 5V rail</text>
+
+  <line x1="300" y1="630" x2="215" y2="400" stroke="#b5651d" stroke-width="1.2"/>
+  <text x="298" y="665" font-size="10" fill="#333">GND</text>
+  <line x1="300" y1="665" x2="215" y2="300" stroke="#333" stroke-width="1.2"/>
+  <text x="298" y="690" font-size="10" fill="#1f6feb">CS</text>
+  <line x1="300" y1="695" x2="215" y2="505" stroke="#1f6feb" stroke-width="1.2"/>
+  <text x="298" y="710" font-size="10" fill="#1f6feb">MOSI</text>
+  <line x1="325" y1="715" x2="215" y2="535" stroke="#1f6feb" stroke-width="1.2"/>
+  <text x="380" y="680" font-size="10" fill="#1f6feb">MISO / SCK →</text>
+  <line x1="440" y1="695" x2="480" y2="695" stroke="#1f6feb" stroke-width="1.2"/>
+  <path d="M480 695 C 500 695, 500 665, 215 565" fill="none" stroke="#1f6feb" stroke-width="1.2"/>
+  <path d="M460 710 C 500 710, 500 695, 215 595" fill="none" stroke="#1f6feb" stroke-width="1.2"/>
+
+</svg>
+
+<div class="legend">
+  <span><span class="swatch" style="background:#1f6feb"></span> Qwiic chain (independent, daisy-chained)</span>
+  <span><span class="swatch" style="background:#c0392b"></span> +3.3V rail (shared)</span>
+  <span><span class="swatch" style="background:#333"></span> GND rail (shared)</span>
+  <span><span class="swatch" style="background:#c99a1e"></span> SDA bus — I2C data (shared)</span>
+  <span><span class="swatch" style="background:#2e8b57"></span> SCL bus — I2C clock (shared)</span>
+  <span><span class="swatch" style="background:#b5651d"></span> +5V rail (SD card module only)</span>
+  <span><span class="swatch" style="background:#8e44ad"></span> Direct analog signal → A0/A1 (no divider)</span>
+</div>
+
+<div class="note">
+  No voltage-divider network is used on the soil sensors — SIG is wired straight to the analog pin, powered
+  at 3.3V (not 5V — only the SD card module is on the 5V rail). Calibration in <code>sketch.ino</code>
+  (<code>SOIL_DRY_ADC</code>=1020, <code>SOIL_WET_ADC</code>=350) is against that raw, undivided signal —
+  re-calibrate per unit if readings look off; note the firmware's own comment still describes this as a
+  5V-scale reading, which is now stale against the actual 3.3V wiring.
+</div>
+
+</div>
+</body>
+</html>

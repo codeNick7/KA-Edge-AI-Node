@@ -137,6 +137,37 @@ function _filterDataset(values, dates, filter) {
   return { values: filtValues, dates: filtDates };
 }
 
+// Collapse a {values, dates} series down to at most 1 point per hour (keeping
+// the last reading within each hour bucket), so every Raw Sensor Stream chart
+// renders at the same 1-point-per-hour tick scale regardless of which time
+// filter is active or whether the underlying points are live 1Hz readings or
+// server-archived hourly-tier history (2026-09-28: applied to all six
+// filters, including 5m/15m/1h -- those windows are shorter than one hour so
+// they render at most a single point by design, matching the day/week/
+// overall charts' scale instead of a denser live trace).
+function _bucketToHourly(values, dates) {
+  if (!dates || dates.length <= 1) return { values: values, dates: dates };
+  var byHour = {};
+  var order = [];
+  for (var i = 0; i < dates.length; i++) {
+    var d = new Date(dates[i]);
+    if (isNaN(d.getTime())) continue;
+    // UTC, not local time (setMinutes/getTimezoneOffset) -- readings are stored with
+    // explicit UTC offsets (see real_source.py), and a local-time truncation would put
+    // the hour boundary at the wrong wall-clock instant for any non-whole-hour offset
+    // (e.g. UTC+5:30), differently per viewer's browser timezone.
+    d.setUTCMinutes(0, 0, 0);
+    var key = d.toISOString();
+    if (!(key in byHour)) order.push(key);
+    byHour[key] = { value: values[i], date: dates[i] }; // last reading in the hour wins
+  }
+  order.sort();
+  return {
+    values: order.map(function (k) { return byHour[k].value; }),
+    dates: order.map(function (k) { return byHour[k].date; }),
+  };
+}
+
 function _setupFilterListeners(groupId, onFilterChange) {
   var group = document.getElementById(groupId);
   if (!group) return;
@@ -337,10 +368,11 @@ function _renderCharts(pot) {
     var series = _sortedSeries(buf.byTs);
     if (!series.values.length) return;
     var filt = _filterDataset(series.values, series.dates, KA.currentFilter);
-    var chart = KA.trendChart(filt.values, filt.dates, POT_COLOUR[pot], SENSOR_META[sensor].unit, false);
+    var bucketed = _bucketToHourly(filt.values, filt.dates);
+    var chart = KA.trendChart(bucketed.values, bucketed.dates, POT_COLOUR[pot], SENSOR_META[sensor].unit, false);
     container.innerHTML = "";
     container.appendChild(chart);
-    _updateTrendBadge("trend-" + sensor + "-" + pot, filt.values, SENSOR_META[sensor].unit);
+    _updateTrendBadge("trend-" + sensor + "-" + pot, bucketed.values, SENSOR_META[sensor].unit);
   });
 }
 

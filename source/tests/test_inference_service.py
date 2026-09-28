@@ -14,6 +14,7 @@ callers), not at inference time.
 """
 
 import importlib.util
+import json
 import os
 import sys
 import sqlite3
@@ -194,3 +195,42 @@ def test_pots_are_independent_in_shared_db(tmp_path):
     n_a = svc_a.run_once()
     assert n_a == 12 - (TREND_WINDOW - 1)
     assert _fetch_inference_rows(db_path, "B") == []  # B untouched by A's service
+
+
+def test_stale_resume_pointer_self_heals(tmp_path):
+    """Real 2026-09-25 incident: sensor_data.db got rebuilt (AUTOINCREMENT restarting
+    from 1) while a pot's .inference_service_state_<pot>.json still pointed at a much
+    higher last_reading_id from before the rebuild. _fetch_batch()'s `WHERE id > ?`
+    then matched zero rows forever -- the service kept "running" (no crash, no error)
+    but never wrote another inference_results row, silently, indefinitely.
+    PotService must detect a resume pointer beyond the live table's current MAX(id)
+    and reset to 0 (full backfill) instead of stalling forever."""
+    db_path = str(tmp_path / "sensor_data.db")
+    _seed_readings(db_path, "A", n=12)  # real ids will be small (1..12)
+
+    state_path = tmp_path / ".inference_service_state_a.json"
+    state_path.write_text(json.dumps({"last_reading_id": 999999, "window": [{"stale": True}]}))
+
+    svc = inference_service.PotService("A", db_path, str(state_path))
+    assert svc.last_reading_id == 0, "stale pointer beyond MAX(id) must be reset to 0"
+    assert svc.window == []
+
+    n_written = svc.run_once()
+    assert n_written == 12 - (TREND_WINDOW - 1), "must fully backfill from scratch, not stay stuck at 0 new rows"
+
+    persisted = json.loads(state_path.read_text())
+    assert persisted["last_reading_id"] > 0
+
+
+def test_valid_resume_pointer_is_not_reset(tmp_path):
+    """A resume pointer that's still within the live table's id range (the normal
+    case) must NOT be touched by the stale-pointer guard."""
+    db_path = str(tmp_path / "sensor_data.db")
+    _seed_readings(db_path, "A", n=12)
+    svc, _, state = _make_service(tmp_path)
+    svc.run_once()
+    saved_id = svc.last_reading_id
+    assert saved_id > 0
+
+    restarted = inference_service.PotService("A", db_path, str(state))
+    assert restarted.last_reading_id == saved_id, "a valid, still-current pointer must survive the staleness check"

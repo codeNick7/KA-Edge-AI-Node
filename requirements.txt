@@ -1,4 +1,12 @@
+# Full dev-machine environment: running the test suite, training/exporting models
+# (source/edge_node/train.py, tiny_transformer.py), and running the dashboard locally.
+# The board only needs source/requirements-board.txt (flask) -- trained_model.py and
+# everything the dashboard/inference_service.py actually import at runtime are
+# dependency-free, no numpy/scipy/scikit-learn there. See
+# scripts/deploy_dashboard_to_board.sh.
 pytest
 scikit-learn
+numpy
+scipy
 flask
 python-dotenv

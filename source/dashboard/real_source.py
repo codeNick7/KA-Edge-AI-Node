@@ -145,6 +145,10 @@ def _to_inference_row(row: sqlite3.Row) -> dict:
     }
 
 
+_RAW_COLS = "pot_id, sample_index, millis_ms, temp_c, humidity_pct, pressure_hpa, gas_kohm, light_lux, moisture_pct, received_at"
+_INF_COLS = "pot_id, timestamp, rsmi, light_delta, gas_index_trend, rsmi_trend, flag, confidence, contributing_trend, model_version"
+
+
 class RealDataSource:
     """Serves real sensor data for both Pot A and Pot B from board_db's SQLite tables."""
 
@@ -178,57 +182,114 @@ class RealDataSource:
             raise ValueError(f"RealDataSource: unknown pot {pot!r}")
 
     def _fetch(self, pot: str, table: str, ts_col: str, transform, n: int,
-               range: str | None, max_points: int | None) -> list[dict]:
+               range_name: str | None, max_points: int | None) -> list[dict]:
         conn = self._connect()
         if conn is None:
             return []
+        cols = _RAW_COLS if table == "readings" else _INF_COLS
         try:
             if n and n > 0:
                 rows = conn.execute(
-                    f"SELECT * FROM {table} WHERE pot_id = ? ORDER BY {ts_col} DESC LIMIT ?", (pot, n)
+                    f"SELECT {cols} FROM {table} WHERE pot_id = ? ORDER BY {ts_col} DESC LIMIT ?", (pot, n)
                 ).fetchall()
                 return [transform(r) for r in reversed(rows)]
 
-            # n == 0: full-history mode, optionally range-filtered + decimated.
+            # n == 0: full-history / chart range mode.
             cutoff_iso = None
-            if range in _CUTOFF_RANGES:
+            if range_name in _CUTOFF_RANGES:
                 last_row = conn.execute(
                     f"SELECT {ts_col} FROM {table} WHERE pot_id = ? ORDER BY {ts_col} DESC LIMIT 1", (pot,)
                 ).fetchone()
                 last_dt = _parse_iso(last_row[0]) if last_row else None
                 if last_dt is not None:
-                    cutoff = _cutoff_for_range(range, last_dt)
+                    cutoff = _cutoff_for_range(range_name, last_dt)
                     cutoff_iso = cutoff.isoformat() if cutoff else None
 
-            where, params = "pot_id = ?", [pot]
-            if cutoff_iso is not None:
-                where += f" AND {ts_col} >= ?"
-                params.append(cutoff_iso)
+            # Check if tiered table exists (readings_tiered / inference_tiered)
+            tiered_table = "readings_tiered" if table == "readings" else "inference_tiered"
+            has_tiered = bool(conn.execute(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?", (tiered_table,)
+            ).fetchone()[0])
 
-            count = conn.execute(f"SELECT COUNT(*) FROM {table} WHERE {where}", params).fetchone()[0]
-            if cutoff_iso is not None:
+            if has_tiered:
+                earliest_live_row = conn.execute(
+                    f"SELECT MIN({ts_col}) FROM {table} WHERE pot_id = ?", (pot,)
+                ).fetchone()
+                earliest_live_ts = (
+                    earliest_live_row[0] if (earliest_live_row and earliest_live_row[0]) else "9999-12-31T23:59:59"
+                )
+
+                if cutoff_iso is not None:
+                    query = f"""
+                    SELECT * FROM (
+                        SELECT {cols} FROM {tiered_table} WHERE pot_id = ? AND {ts_col} >= ? AND {ts_col} < ?
+                        UNION ALL
+                        SELECT {cols} FROM {table} WHERE pot_id = ? AND {ts_col} >= ?
+                    ) ORDER BY {ts_col} ASC
+                    """
+                    params = [pot, cutoff_iso, earliest_live_ts, pot, cutoff_iso]
+                    rows = conn.execute(query, params).fetchall()
+                    if not rows:
+                        return []
+                    if len(rows) < 2:
+                        # Fall back to full series if time window was too narrow
+                        query_full = f"""
+                        SELECT * FROM (
+                            SELECT {cols} FROM {tiered_table} WHERE pot_id = ? AND {ts_col} < ?
+                            UNION ALL
+                            SELECT {cols} FROM {table} WHERE pot_id = ?
+                        ) ORDER BY {ts_col} ASC
+                        """
+                        rows = conn.execute(query_full, [pot, earliest_live_ts, pot]).fetchall()
+                else:
+                    query = f"""
+                    SELECT * FROM (
+                        SELECT {cols} FROM {tiered_table} WHERE pot_id = ? AND {ts_col} < ?
+                        UNION ALL
+                        SELECT {cols} FROM {table} WHERE pot_id = ?
+                    ) ORDER BY {ts_col} ASC
+                    """
+                    params = [pot, earliest_live_ts, pot]
+                    rows = conn.execute(query, params).fetchall()
+            else:
+                where, params = "pot_id = ?", [pot]
+                if cutoff_iso is not None:
+                    where += f" AND {ts_col} >= ?"
+                    params.append(cutoff_iso)
+
+                count = conn.execute(f"SELECT COUNT(*) FROM {table} WHERE {where}", params).fetchone()[0]
+                if cutoff_iso is not None:
+                    if count == 0:
+                        return []
+                    if count < 2:
+                        where, params = "pot_id = ?", [pot]
+                        count = conn.execute(f"SELECT COUNT(*) FROM {table} WHERE {where}", params).fetchone()[0]
                 if count == 0:
                     return []
-                if count < 2:
-                    # Same "not enough points" fallback the old client-side
-                    # _filterDataset used -- a too-narrow window shouldn't
-                    # degrade to an unusably sparse/empty chart.
-                    where, params = "pot_id = ?", [pot]
-                    count = conn.execute(f"SELECT COUNT(*) FROM {table} WHERE {where}", params).fetchone()[0]
-            if count == 0:
-                return []
 
-            if not max_points or count <= max_points:
-                rows = conn.execute(f"SELECT * FROM {table} WHERE {where} ORDER BY {ts_col} ASC", params).fetchall()
+                if not max_points or count <= max_points:
+                    rows = conn.execute(f"SELECT {cols} FROM {table} WHERE {where} ORDER BY {ts_col} ASC", params).fetchall()
+                    return [transform(r) for r in rows]
+
+                stride = -(-count // max_points)
+                query = (
+                    f"SELECT {cols} FROM (SELECT *, ROW_NUMBER() OVER (ORDER BY {ts_col} ASC) AS rn "
+                    f"FROM {table} WHERE {where}) WHERE (rn - 1) % ? = 0 OR rn = ?"
+                )
+                rows = conn.execute(query, params + [stride, count]).fetchall()
                 return [transform(r) for r in rows]
 
-            stride = -(-count // max_points)  # ceil division
-            query = (
-                f"SELECT * FROM (SELECT *, ROW_NUMBER() OVER (ORDER BY {ts_col} ASC) AS rn "
-                f"FROM {table} WHERE {where}) WHERE (rn - 1) % ? = 0 OR rn = ?"
-            )
-            rows = conn.execute(query, params + [stride, count]).fetchall()
-            return [transform(r) for r in rows]
+            if not rows:
+                return []
+
+            if not max_points or len(rows) <= max_points:
+                return [transform(r) for r in rows]
+
+            stride = -(-len(rows) // max_points)
+            decimated = [rows[i] for i in range(0, len(rows), stride)]
+            if rows and (len(rows) - 1) % stride != 0:
+                decimated.append(rows[-1])
+            return [transform(r) for r in decimated]
         finally:
             conn.close()
 

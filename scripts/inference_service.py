@@ -136,6 +136,7 @@ class PotService:
         self.db_path = db_path
         self.state_path = state_path
         self.last_reading_id, self.window = self._load_state()
+        self._reset_if_stale()
 
     def _load_state(self) -> tuple[int, list[dict]]:
         if os.path.exists(self.state_path):
@@ -146,6 +147,43 @@ class PotService:
             except (json.JSONDecodeError, OSError):
                 pass
         return 0, []
+
+    def _reset_if_stale(self) -> None:
+        """Guard against a resume pointer that no longer refers to any row in
+        `readings` -- e.g. sensor_data.db got rebuilt/recreated (AUTOINCREMENT
+        restarting from 1) while this pot's state file was left pointing at the
+        old, now-nonexistent id range from before the rebuild.
+
+        Real incident (2026-09-25): exactly this happened -- state file had
+        last_reading_id=2894204 from a prior db incarnation, the live db's
+        current MAX(id) was 59478, so `_fetch_batch()`'s `WHERE id > ?` matched
+        zero rows on every single poll cycle, forever, with no error and no
+        crash -- inference_results silently stayed empty indefinitely, with
+        nothing in the process's own behavior (still "running", still using
+        some CPU) to indicate anything was wrong. If the pointer is beyond what
+        currently exists, there is nothing valid to resume from -- rewind to 0
+        (full backfill from scratch, same as a first-ever run) rather than
+        silently never making progress again.
+        """
+        if self.last_reading_id <= 0:
+            return
+        try:
+            with board_db.connect(self.db_path) as conn:
+                max_id = conn.execute(
+                    "SELECT MAX(id) FROM readings WHERE pot_id = ?", (self.pot,)
+                ).fetchone()[0]
+        except sqlite3.OperationalError:
+            return  # db not reachable yet -- let the normal poll-cycle retry path handle it
+        if max_id is not None and self.last_reading_id > max_id:
+            print(
+                f"[{self.pot}] WARN: resume pointer last_reading_id={self.last_reading_id} is "
+                f"beyond the live table's MAX(id)={max_id} -- sensor_data.db was likely rebuilt "
+                f"since this state file was last written. Resetting to 0 (full backfill) instead "
+                f"of silently never catching up.",
+                flush=True,
+            )
+            self.last_reading_id, self.window = 0, []
+            self._save_state()
 
     def _save_state(self) -> None:
         tmp_path = self.state_path + ".tmp"
@@ -248,23 +286,33 @@ def main() -> None:
 
 
 def _run_once_resilient(svc: "PotService") -> int:
-    """svc.run_once(), but a transient sqlite3.OperationalError (e.g. "database is
-    locked" -- main.py and this script are two independent processes writing to the
-    same file concurrently, see board_db.py's _CONNECT_TIMEOUT_S comment) is logged
-    and swallowed instead of killing the whole watch process for every pot.
+    """svc.run_once(), but any exception (not just sqlite3.OperationalError -- see
+    2026-09-25 widening below) is logged and swallowed instead of killing the whole
+    watch process for every pot.
 
-    2026-09-17 incident: exactly this error, uncaught, crashed inference_service.py
-    mid-backfill on pot A -- pot B never got a single run_once() call afterward
-    because the process had already exited. PotService.run_once()'s own per-batch
-    checkpointing (state saved only after a batch's insert fully commits) already
-    makes a failed batch safe to simply retry on the next poll cycle -- nothing here
-    needs its own retry loop, just not dying.
+    2026-09-17 incident: an uncaught sqlite3.OperationalError ("database is locked"
+    -- main.py and this script are two independent processes writing to the same
+    file concurrently, see board_db.py's _CONNECT_TIMEOUT_S comment) crashed
+    inference_service.py mid-backfill on pot A -- pot B never got a single
+    run_once() call afterward because the process had already exited. Originally
+    fixed by catching only that specific exception type.
+
+    2026-09-25 widening: that narrow catch still leaves the exact same failure mode
+    open for ANY other exception (a bad/edge-case reading, an unexpected value
+    reaching trained_predict/feature computation, etc.) -- it would just as
+    silently kill the whole --watch loop for both pots, with no supervisor process
+    to restart it (see nn-inference-upgrade-plan.md's "not yet required" note on a
+    real process supervisor). PotService.run_once()'s own per-batch checkpointing
+    (state saved only after a batch's insert fully commits) already makes a failed
+    batch safe to simply retry on the next poll cycle -- nothing here needs its own
+    retry loop, just not dying, for any exception, not just the one type that
+    happened to cause the last incident.
     """
     try:
         return svc.run_once()
-    except sqlite3.OperationalError as e:
-        print(f"[{svc.pot}] WARN: run_once() failed ({e}) -- safe to retry (--watch will "
-              f"retry next poll cycle automatically; --once needs to be re-run)", flush=True)
+    except Exception as e:  # noqa: BLE001 -- a bug in one pot's batch must never take down the other
+        print(f"[{svc.pot}] WARN: run_once() failed ({type(e).__name__}: {e}) -- safe to retry "
+              f"(--watch will retry next poll cycle automatically; --once needs to be re-run)", flush=True)
         return 0
 
 

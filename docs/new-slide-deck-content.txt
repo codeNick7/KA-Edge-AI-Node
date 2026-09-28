@@ -46,7 +46,7 @@ The node should
 * Understand
 * Detect anomalies
 * Generate evidence
-* Synchronize with Karbon-Assure
+* Synchronise with Karbon-Assure
 
 ⸻
 
@@ -134,7 +134,7 @@ Examples
 * Temperature trend
 * Humidity trend
 
-Emphasize that AI consumes engineered features rather than raw sensor values.
+Emphasise that AI consumes engineered features rather than raw sensor values.
 
 ⸻
 
@@ -192,7 +192,7 @@ Each observation contains
 * Confidence
 * Model version
 
-This is the artifact synchronized with Karbon-Assure.
+This is the artefact synchronised with Karbon-Assure.
 
 ⸻
 
@@ -303,7 +303,7 @@ Current dMRV today typically relies on one of:
   quarterly/annual), expensive to scale
 * Satellite/remote-sensing imagery — good for canopy-level trends, but
   cannot see soil moisture or local microclimate, and has cloud-cover gaps
-* IoT sensors streaming raw telemetry to the cloud for centralized
+* IoT sensors streaming raw telemetry to the cloud for centralised
   processing — where connectivity allows; expensive/unreliable in the
   remote, rural terrain most carbon/conservation projects actually sit in
 
@@ -340,7 +340,7 @@ The honest bandwidth story (real numbers, this project's actual payloads
 
 Faster response · Offline capability (local JSONL/SD is the durable
 source of truth regardless of connectivity — see sync_queue.py) ·
-Explainable AI (decision tree, not a black box) · Scalable architecture
+Confidence-scored AI (every classification ships a confidence value, not a black-box yes/no) · Scalable architecture
 
 ⸻
 
@@ -356,7 +356,7 @@ What this prototype demonstrates
 
 ✅ Evidence generation
 
-✅ Cloud synchronization
+✅ Cloud synchronisation
 
 Make it explicit that these are implemented.
 

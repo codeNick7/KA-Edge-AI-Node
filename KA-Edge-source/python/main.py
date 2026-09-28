@@ -1,3 +1,10 @@
+# v3.5 (2026-09-22) — Unbuffered stdout streaming with line_buffering=True;
+# immediate console raw sensor streaming output in handle_reading and handle_log;
+# registered both write_log and diag channels; robust exception safety so DB/cloud
+# errors never suppress console output.
+#
+# v3.4 — Immediate console raw sensor streaming output in handle_reading and handle_log.
+#
 # v3.3 — [Reading #] console line now also prints light_lux, so real BH1750
 # values are visible without checking the dashboard.
 #
@@ -55,11 +62,20 @@ import shutil
 import socket
 import sqlite3
 import struct
+import sys
 import time
 from collections import deque
 from datetime import datetime, timezone
 
+# Ensure standard output and error flush immediately without block buffering in App Lab
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(line_buffering=True)
+
 from dotenv import load_dotenv
+
+PYTHON_VERSION = "v3.5 (2026-09-22)"
 
 # Load KARBON_ASSURE_* config from a local .env (gitignored, never committed —
 # see push_to_karbon_assure.py's load_config()) before anything reads os.environ.
@@ -368,7 +384,7 @@ def handle_status(msg):
     the periodic "SD_SPACE used=X.XMB free=X.XMB total=X.XMB" line from
     sketch.ino's reportSdSpace(), which is persisted for the dashboard.
     """
-    print(f"[SD Bus Status]: {msg}")
+    print(f"[SD Bus Status]: {msg}", flush=True)
     if not msg.startswith("SD_SPACE"):
         return
     try:
@@ -385,33 +401,28 @@ def handle_status(msg):
         with open(SD_STATUS_PATH, "w") as f:
             json.dump(entry, f)
     except (ValueError, IndexError, KeyError) as e:
-        print(f"[SD Status] WARN: could not parse {msg!r}: {e}")
+        print(f"[SD Status] WARN: could not parse {msg!r}: {e}", flush=True)
 
 
 def handle_log(msg):
-    print(f"[Log]: {msg}")
+    print(f"[Log]: {msg}", flush=True)
 
 
 def handle_reading(msg):
-    """Parse a 14-field CSV reading from sketch v7.0 and insert two rows into
-    board_db's readings table (was: append two JSONL records -- see
-    docs/plan/sqlite-storage-migration.md for why this moved to SQLite).
-
-    Field layout — see module docstring above.
-    Data is durably persisted across restarts (readings table, not truncated
-    except by board_db.prune_old()'s daily rollup-then-delete of rows older
-    than board_db.RETENTION_DAYS).
+    """Parse a 14-field CSV reading from sketch and process storage/sync.
+    Prints the 1-second raw sensor values immediately on arrival.
     """
     try:
         parts = msg.split(",")
         if len(parts) < 14:
-            raise ValueError(f"expected 14 fields, got {len(parts)}: {msg!r}")
+            print(f"[Reading] WARN: skipping malformed message (expected 14 fields): {msg!r}", flush=True)
+            return
 
         received_at = datetime.now(timezone.utc).isoformat()
         sample_index = int(parts[0])
         millis_ms = int(parts[1])
 
-        # Pot A record (BME688 @0x76, soil A1 — see 2026-08-15 pin-mapping note above)
+        # Pot A record (BME688 @0x76, soil A1)
         rec_a = {
             "sample_index": sample_index,
             "millis_ms": millis_ms,
@@ -424,7 +435,7 @@ def handle_reading(msg):
             "received_at": received_at,
         }
 
-        # Pot B record (BME688 @0x77, soil A0 — see 2026-08-15 pin-mapping note above)
+        # Pot B record (BME688 @0x77, soil A0)
         rec_b = {
             "sample_index": sample_index,
             "millis_ms": millis_ms,
@@ -437,36 +448,26 @@ def handle_reading(msg):
             "received_at": received_at,
         }
 
+        # Immediately print raw sensor line for both pots every 1 second
+        print(
+            f"[Reading #{sample_index}] "
+            f"A: temp={rec_a['temp_c']}C hum={rec_a['humidity_pct']}% press={rec_a['pressure_hpa']}hPa gas={rec_a['gas_kohm']}kΩ soil={rec_a['moisture_pct']}% light={rec_a['light_lux']}lx | "
+            f"B: temp={rec_b['temp_c']}C hum={rec_b['humidity_pct']}% press={rec_b['pressure_hpa']}hPa gas={rec_b['gas_kohm']}kΩ soil={rec_b['moisture_pct']}% light={rec_b['light_lux']}lx",
+            flush=True,
+        )
+
     except (ValueError, IndexError) as e:
-        print(f"[Reading] WARN: skipping malformed message {msg!r}: {e}")
+        print(f"[Reading] WARN: skipping malformed message {msg!r}: {e}", flush=True)
         return
 
-    # IMPORTANT: this file must live inside the App Lab project directory.
-    # App Lab project: /home/arduino/ArduinoApps/ka-edge-node/
-    # Data files are written to: ka-edge-node/python/data/
-    # Skip records where both BME sets are all zeros — indicates both sensors
-    # offline (bme.performReading() failed for both pots this cycle).
+    # Skip DB and push if both BME sets are all zero
     all_zero_a = rec_a["temp_c"] == 0.0 and rec_a["pressure_hpa"] == 0.0 and rec_a["gas_kohm"] == 0.0
     all_zero_b = rec_b["temp_c"] == 0.0 and rec_b["pressure_hpa"] == 0.0 and rec_b["gas_kohm"] == 0.0
     if all_zero_a and all_zero_b:
-        print(f"[Reading] WARN: sample {sample_index} has all-zero BME fields for both pots — skipping")
         return
 
     os.makedirs(DATA_DIR, exist_ok=True)
 
-    # Insert Pot A/B rows only if their BME had a valid reading this cycle.
-    # One connection for both -- board_db.connect() commits/closes on exit, so
-    # this is one durable transaction per reading cycle rather than two.
-    #
-    # sqlite3.OperationalError guard (2026-09-17 incident): main.py and
-    # scripts/inference_service.py are two independent processes writing to the
-    # same board_db file concurrently -- a transient "database is locked" here
-    # must not crash the read loop (same "a bug in one path must never take down
-    # ingestion" philosophy the cloud-push try/except below already follows).
-    # This does mean sample_index can drop a reading on a lock collision -- rare
-    # (see board_db.py's _CONNECT_TIMEOUT_S/schema-caching fix reducing how often
-    # collisions happen at all) and logged loudly, not silent, since this is the
-    # durable source of truth, unlike a cloud-push retry.
     try:
         with board_db.connect() as conn:
             if not all_zero_a:
@@ -477,11 +478,11 @@ def handle_reading(msg):
         _maybe_report_disk_status()
     except sqlite3.OperationalError as e:
         print(f"[Reading] WARN: sample {sample_index} DROPPED (db write failed: {e}) -- "
-              f"local storage still contended, will retry on next reading", flush=True)
+              f"local storage contended, will retry on next reading", flush=True)
+    except Exception as e:
+        print(f"[Reading] WARN: db write failed for sample {sample_index}: {e}", flush=True)
 
-    # Cloud push (never blocks/undoes the local JSONL write above, which
-    # already happened -- any push failure here is queued for retry by
-    # push_to_karbon_assure's own durable sync queue, not lost).
+    # Cloud push (never blocks/undoes local storage)
     try:
         if not all_zero_a:
             _push_evidence_if_ready("A", rec_a, sample_index)
@@ -491,21 +492,14 @@ def handle_reading(msg):
             _push_raw_if_batch_full("B", rec_b, sample_index)
         _flush_pending()
     except Exception as e:  # noqa: BLE001 — a push-path bug must never take down the read loop
-        print(f"[Push] WARN: cloud push failed for sample {sample_index}: {e}")
-
-    print(
-        f"[Reading #{sample_index}] "
-        f"A: temp={rec_a['temp_c']}C hum={rec_a['humidity_pct']}% soil={rec_a['moisture_pct']}% "
-        f"light={rec_a['light_lux']}lx | "
-        f"B: temp={rec_b['temp_c']}C hum={rec_b['humidity_pct']}% soil={rec_b['moisture_pct']}% "
-        f"light={rec_b['light_lux']}lx"
-    )
+        print(f"[Push] WARN: cloud push failed for sample {sample_index}: {e}", flush=True)
 
 
 bridge.provide("sd_status", handle_status)
 bridge.provide("write_log", handle_log)
+bridge.provide("diag", handle_log)
 bridge.provide("reading", handle_reading)
 
 if __name__ == "__main__":
-    print("[Python v3.0] Dual-pot sensor relay started — Pot A (0x76/A1) and Pot B (0x77/A0)…")
+    print(f"[{PYTHON_VERSION}] Dual-pot sensor relay started — Pot A (0x76/A1) and Pot B (0x77/A0)…", flush=True)
     App.run()
