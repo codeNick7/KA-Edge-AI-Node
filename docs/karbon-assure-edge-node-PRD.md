@@ -141,7 +141,7 @@ Sending both the semantic flag and the raw/derived values gives the Karbon Assur
 ## 9. Contest Alignment
 
 - **Creativity/innovation**: the differentiator is not the sensors (proxies are known) but wiring a continuous edge-inference node directly into an insurable MRV pipeline, with an explainable on-device decision layer rather than raw telemetry forwarding.
-- **BOM sourced from DigiKey**: UNO Q, capacitive soil sensor, BME688, light sensor — confirm all are DigiKey-listed SKUs in the final BOM table.
+- **BOM sourced from DigiKey**: `docs/karbon-assure-edge-node-BOM.csv` lists DigiKey-orderable SKUs/pricing for all four components (UNO Q, capacitive soil sensor x2, BME688 x2, BH1750 x2 — one full sensor set per pot) so the build is reproducible entirely through DigiKey's catalog. Actual sourcing this round: only the UNO Q board was purchased through DigiKey (order receipt not published); the three sensor types were sourced locally rather than via DigiKey this time — the BOM still cites their DigiKey-equivalent part numbers for reproducibility.
 - **Documentation quality**: this PRD, plus explicit label-provenance notes (Section 5) and the non-claim statement (Section 1).
 - **Real-world applicability**: tie every flag type back to an MRV/insurance use case (e.g. "drought_onset" → early warning for a carbon-credit project at risk of reversal).
 - **Video demonstration**: show live sensor readings → on-device flag firing → flag appearing on the Karbon Assure dashboard, in one continuous take if possible.

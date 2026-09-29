@@ -22,7 +22,11 @@ BH1750 ambient-light sensor. The pipeline runs in four on-device stages:
    agnostic relative features (RSMI, light delta, gas-index trend).
 3. **Detect** — a compact trained transformer classifier (1 self-attention block,
    1,155 parameters, exported to dependency-free pure Python) classifies soil-moisture
-   state with a confidence score. A standalone background routine
+   state with a confidence score. Trained on 1.27M real readings from the controlled
+   Pot A/B trial — **98.9% train / 88.9% test accuracy** (chronological split: train
+   on the earlier 80%, test on the later 20%) — see `docs/model-choice-jury-justification.md`
+   for the full training methodology, accuracy numbers, and why this architecture was
+   chosen over the earlier decision tree. A standalone background routine
    (`scripts/inference_service.py`) computes this continuously; the dashboard only
    reads the results, it never runs the model itself.
 4. **Synchronize** — HMAC-signed evidence records are queued in a durable local
@@ -72,6 +76,24 @@ or directly:
 ```bash
 .venv/bin/python source/dashboard/app.py
 ```
+
+## Training the model
+
+Retrains `edge_node/tiny_transformer.py`'s classifier on a labeled training set and
+exports it to the dependency-free on-device module both the board and the dashboard
+share (`source/edge_node/trained_model.py`):
+
+```bash
+.venv/bin/python scripts/build_training_set.py /path/to/sensor_data.db \
+    --out training_set.jsonl
+.venv/bin/python scripts/train_transformer.py training_set.jsonl \
+    --export source/edge_node/trained_model.py
+```
+
+Trains only on the three flags with real, sustained support in the current trial data
+(`stable`, `waterlogged_risk`, `soil_health_degrading`) — see
+`docs/model-choice-jury-justification.md` for why, and for the full accuracy breakdown
+including the leave-one-pot-out generalization check.
 
 ## Running tests
 
