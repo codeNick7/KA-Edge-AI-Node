@@ -371,6 +371,16 @@ def _push_raw_if_batch_full(pot: str, rec: dict, sample_index: int):
 
     readings, _raw_batch_buffer[pot] = buf, []
     for name, config in _push_configs.items():
+        # Raw readings are local-diagnostic data, not part of the PRD's cloud
+        # contract (only inference/flag/confidence/trend -- see
+        # _push_evidence_if_ready -- is meant to leave the board). Pushing raw
+        # to "cloud" too was an oversight from before "local" got disabled
+        # (2026-09-11, see the _push_configs comment above): with only
+        # "cloud" configured, this loop was sending raw batches there by
+        # default. Board-local storage (board_db/JSONL) remains the durable
+        # raw source of truth regardless.
+        if name == "cloud":
+            continue
         push_client.push_raw_batch(
             config["node_id"], config["project_id"], pot, readings,
             config, time_uncertain=not _ntp_info["ntp_synced"],
