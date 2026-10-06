@@ -184,3 +184,19 @@ and shown on the board's own local dashboard.
 3. Chart (user chose): daily avg gas + daily avg RSMI in the dmrv panel (distributed-app, separate plan doc).
 4. D4: backfill script pot scope.
 5. Board housekeeping: data/sync_queue_cloud.db.bak-20261006 (209 MB) → move off the board.
+
+## Probe degradation analysis (2026-10-06, after the commit)
+User report: Pot B probe coating gone along its full length up to the electronics; Pot A partially exposed. Replacement: generic
+"Capacitive Soil Moisture Sensor v1.2" (Robocraze, Rs 55). The vendor says it is qualitative only; edges/electronics unsealed.
+Source: data-from-board/Oct05/data/sensor_data.db (read-only; partly corrupt: 1 unreadable 2000-id chunk in readings;
+inference_results unreadable). Daily rollup covers 08-14..09-27, raw readings 09-18..10-05.
+- Pot B moisture: daily mean 47–54% from 08-16 to 10-05, low daily sd (0.7–2.4), no clipping, no drying trend over 7 weeks.
+  No clear failure signature, but the flatness could also mean an insensitive probe. Needs the dry-air / in-water test.
+- Pot A moisture: crept 80 → 90 → 100% (08-14..09-07), pinned at exactly 100.0 (sd 0.00) since 10-02. Consistent with a
+  saturated/shorting probe (or genuinely waterlogged soil); not distinguishable without the test.
+- Both pots show a discontinuity on 09-10 (folder "sept09-post-sensor-swap"). What was swapped is unknown → ask the user.
+- Gas: Pot B 143 → ~126–130 (08-16..22) → ~72–80 (late Aug) → 55–107 since; Pot A 203–237 → 160–175 → 135–200.
+  BOTH pots decline. So part of the "Pot B gas decline" is common-mode (BME688 ageing/burn-in, ambient VOC, humidity:
+  A ~82% vs B ~59% RH), not soil-specific. The B/A gas ratio went from ~0.55–0.7 (mid-Aug) to ~0.4–0.5: a modest, noisy
+  differential decline. CORRECTION to the earlier "gas is the clean evidence" claim.
+- Exclude days with n < 500 (09-18..09-23: board mostly down; gas 14–38 kOhm = post-power-on warm-up).

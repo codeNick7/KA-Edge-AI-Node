@@ -1,3 +1,7 @@
+# v3.7 (2026-10-06) — Pot B evidence carries Pot A's same-sample gas reading as
+# raw.ref_gas_index/raw.ref_pot_id (reference for common-mode BME688 drift);
+# Pot A is still not pushed as its own evidence stream.
+#
 # v3.6 (2026-10-06) — Per-destination pot scope: the "cloud" destination now
 # receives Pot B only (KARBON_ASSURE_CLOUD_POTS, falls back to B when unset).
 # Pot A is still stored, inferred and shown locally; it just no longer leaves
@@ -80,7 +84,7 @@ if hasattr(sys.stderr, "reconfigure"):
 
 from dotenv import load_dotenv
 
-PYTHON_VERSION = "v3.6 (2026-10-06)"
+PYTHON_VERSION = "v3.7 (2026-10-06)"
 
 # Load KARBON_ASSURE_* config from a local .env (gitignored, never committed —
 # see push_to_karbon_assure.py's load_config()) before anything reads os.environ.
@@ -246,11 +250,19 @@ def _pot_allowed(name: str, pot: str) -> bool:
     return pots is None or pot in pots
 
 
-def _push_evidence_if_ready(pot: str, rec: dict, sample_index: int):
+def _push_evidence_if_ready(pot: str, rec: dict, sample_index: int,
+                            ref_gas: float | None = None, ref_pot: str | None = None):
     """Append rec to pot's rolling history; once there's a full trend
     window, compute rsmi/flag/confidence exactly like the dashboard's
     RealDataSource does (same edge_node functions) and push it to every
-    configured destination whose pot scope includes this pot."""
+    configured destination whose pot scope includes this pot.
+
+    ref_gas/ref_pot (2026-10-06): the reference pot's gas reading from the
+    same sample, carried as raw.ref_gas_index/raw.ref_pot_id. Both pots' BME688
+    gas drifts together (sensor ageing, ambient VOCs), so the soil signal is
+    the gap between them; the cloud only receives Pot B, so the reference
+    rides along inside Pot B's record instead of as its own evidence stream.
+    See distributed-app docs/plan/edge-node-gas-reference-chart.md."""
     if not _push_configs:
         return
 
@@ -295,6 +307,9 @@ def _push_evidence_if_ready(pot: str, rec: dict, sample_index: int):
             "light_lux": rec["light_lux"],
         },
     }
+    if ref_gas is not None:
+        base_record["raw"]["ref_gas_index"] = ref_gas
+        base_record["raw"]["ref_pot_id"] = ref_pot
     # node_id/project_id are per-destination -- each backend has its own
     # device registration and its own base_projects.id UUID for this project.
     for name, config in _push_configs.items():
@@ -527,7 +542,9 @@ def handle_reading(msg):
             _push_evidence_if_ready("A", rec_a, sample_index)
             _push_raw_if_batch_full("A", rec_a, sample_index)
         if not all_zero_b:
-            _push_evidence_if_ready("B", rec_b, sample_index)
+            # Pot A as Pot B's gas reference -- same sample, None if Pot A's BME read all-zero
+            _push_evidence_if_ready("B", rec_b, sample_index,
+                                    ref_gas=None if all_zero_a else rec_a["gas_kohm"], ref_pot="A")
             _push_raw_if_batch_full("B", rec_b, sample_index)
         _flush_pending()
     except Exception as e:  # noqa: BLE001 — a push-path bug must never take down the read loop
