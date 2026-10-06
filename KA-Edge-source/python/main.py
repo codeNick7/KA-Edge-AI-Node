@@ -1,3 +1,8 @@
+# v3.6 (2026-10-06) — Per-destination pot scope: the "cloud" destination now
+# receives Pot B only (KARBON_ASSURE_CLOUD_POTS, falls back to B when unset).
+# Pot A is still stored, inferred and shown locally; it just no longer leaves
+# the board. See docs/plan/cloud-push-pot-b-only-2026-10-06.md.
+#
 # v3.5 (2026-09-22) — Unbuffered stdout streaming with line_buffering=True;
 # immediate console raw sensor streaming output in handle_reading and handle_log;
 # registered both write_log and diag channels; robust exception safety so DB/cloud
@@ -75,7 +80,7 @@ if hasattr(sys.stderr, "reconfigure"):
 
 from dotenv import load_dotenv
 
-PYTHON_VERSION = "v3.5 (2026-09-22)"
+PYTHON_VERSION = "v3.6 (2026-10-06)"
 
 # Load KARBON_ASSURE_* config from a local .env (gitignored, never committed —
 # see push_to_karbon_assure.py's load_config()) before anything reads os.environ.
@@ -189,15 +194,26 @@ _write_session_start(_ntp_info)
 # process instance is running. Re-add "local" to the tuple below (or pass
 # push_client.DEFAULT_DESTINATIONS) once the local demo backend is actually
 # back in use.
+#
+# Pot scope per destination (2026-10-06): the demo cloud project represents
+# Pot B only (the degrading pot), but both pots were being pushed. _push_pots
+# maps each destination to the pots it receives (None = all) -- see
+# push_client.allowed_pots(): KARBON_ASSURE_<NAME>_POTS, "cloud" falls back to
+# B when unset. A malformed value disables push entirely (same as any other
+# ConfigError here) rather than risk widening the scope.
 try:
     # _push_configs = push_client.load_configs()  # commented out 2026-09-11, see note above
     _push_configs = push_client.load_configs(names=("cloud",))
+    _push_pots = {name: push_client.allowed_pots(name) for name in _push_configs}
 except push_client.ConfigError as e:
     print(f"[Push] WARN: {e} — evidence/raw push disabled, logging locally only.", flush=True)
     _push_configs = {}
+    _push_pots = {}
 
 if _push_configs:
     print(f"[Push] Karbon Assure destinations enabled: {', '.join(_push_configs)}.", flush=True)
+    for _name, _pots in _push_pots.items():
+        print(f"[Push]   {_name}: pots {'all' if _pots is None else ','.join(sorted(_pots))}", flush=True)
 else:
     print("[Push] No Karbon Assure destinations configured — logging locally only.", flush=True)
 
@@ -224,18 +240,26 @@ def _contributing_trend(rsmi_trend: float) -> str:
     return "moisture_flat"
 
 
+def _pot_allowed(name: str, pot: str) -> bool:
+    """Whether destination `name` receives `pot`'s data (see _push_pots)."""
+    pots = _push_pots.get(name)
+    return pots is None or pot in pots
+
+
 def _push_evidence_if_ready(pot: str, rec: dict, sample_index: int):
     """Append rec to pot's rolling history; once there's a full trend
     window, compute rsmi/flag/confidence exactly like the dashboard's
     RealDataSource does (same edge_node functions) and push it to every
-    configured destination (local + cloud)."""
+    configured destination whose pot scope includes this pot."""
     if not _push_configs:
         return
 
     history = _pot_history[pot]
-    history.append(rec)
+    history.append(rec)  # always, so the window stays continuous if scope changes
     if len(history) < TREND_WINDOW:
         return  # not enough history yet for a trend-window computation
+    if not any(_pot_allowed(name, pot) for name in _push_configs):
+        return  # no destination receives this pot -- skip the inference work
 
     hist_list = list(history)
     rsmi = compute_rsmi(rec["moisture_pct"], TEXTURE)
@@ -274,7 +298,10 @@ def _push_evidence_if_ready(pot: str, rec: dict, sample_index: int):
     # node_id/project_id are per-destination -- each backend has its own
     # device registration and its own base_projects.id UUID for this project.
     for name, config in _push_configs.items():
+        if not _pot_allowed(name, pot):
+            continue
         record = {"node_id": config["node_id"], "project_id": config["project_id"], **base_record}
+        print(f"[DEBUG] evidence payload: {record}", flush=True)
         push_client.push_evidence(record, config, db_path=push_client.db_path_for(name))
 
 
@@ -380,6 +407,8 @@ def _push_raw_if_batch_full(pot: str, rec: dict, sample_index: int):
         # default. Board-local storage (board_db/JSONL) remains the durable
         # raw source of truth regardless.
         if name == "cloud":
+            continue
+        if not _pot_allowed(name, pot):
             continue
         push_client.push_raw_batch(
             config["node_id"], config["project_id"], pot, readings,

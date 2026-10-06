@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from push_to_karbon_assure import ConfigError, db_path_for, load_config, load_configs, sign_request
+from push_to_karbon_assure import ConfigError, allowed_pots, db_path_for, load_config, load_configs, sign_request
 
 _REQUIRED_ENV = {
     "KARBON_ASSURE_API_BASE_URL": "http://localhost:8001",
@@ -30,7 +30,8 @@ _CLOUD_ENV = {
 
 @pytest.fixture
 def clean_env(monkeypatch):
-    for key in {**_REQUIRED_ENV, **_LOCAL_ENV, **_CLOUD_ENV, "KARBON_ASSURE_DESTINATIONS": ""}:
+    _POTS_ENV = {"KARBON_ASSURE_LOCAL_POTS": "", "KARBON_ASSURE_CLOUD_POTS": ""}
+    for key in {**_REQUIRED_ENV, **_LOCAL_ENV, **_CLOUD_ENV, **_POTS_ENV, "KARBON_ASSURE_DESTINATIONS": ""}:
         monkeypatch.delenv(key, raising=False)
     return monkeypatch
 
@@ -133,3 +134,68 @@ def test_db_path_for_suffixes_each_destination_distinctly():
     assert local_path == "/data/sync_queue_local.db"
     assert cloud_path == "/data/sync_queue_cloud.db"
     assert local_path != cloud_path
+
+
+def test_allowed_pots_cloud_defaults_to_pot_b_only(clean_env):
+    assert allowed_pots("cloud") == frozenset({"B"})
+
+
+def test_allowed_pots_other_destinations_default_to_all(clean_env):
+    assert allowed_pots("local") is None
+
+
+def test_allowed_pots_blank_env_falls_back_to_default(clean_env):
+    clean_env.setenv("KARBON_ASSURE_CLOUD_POTS", "   ")
+    assert allowed_pots("cloud") == frozenset({"B"})
+
+
+def test_allowed_pots_env_overrides_default(clean_env):
+    clean_env.setenv("KARBON_ASSURE_CLOUD_POTS", "A, B")
+    assert allowed_pots("cloud") == frozenset({"A", "B"})
+    clean_env.setenv("KARBON_ASSURE_LOCAL_POTS", "B")
+    assert allowed_pots("local") == frozenset({"B"})
+
+
+def test_allowed_pots_ignores_trailing_comma(clean_env):
+    clean_env.setenv("KARBON_ASSURE_CLOUD_POTS", "B,")
+    assert allowed_pots("cloud") == frozenset({"B"})
+
+
+@pytest.mark.parametrize("bad", ["b", "Pot B", "AB", ",", "B;A", "1"])
+def test_allowed_pots_rejects_malformed_values(clean_env, bad):
+    clean_env.setenv("KARBON_ASSURE_CLOUD_POTS", bad)
+    with pytest.raises(ConfigError, match="KARBON_ASSURE_CLOUD_POTS"):
+        allowed_pots("cloud")
+
+
+def test_pots_env_does_not_mark_destination_configured(clean_env):
+    # *_POTS alone must not make load_configs treat "cloud" as (partially) configured
+    clean_env.setenv("KARBON_ASSURE_CLOUD_POTS", "B")
+    assert load_configs() == {}
+
+
+def _evidence(sample_index, timestamp, pot="B"):
+    return {"node_id": "edge-node-01", "project_id": "p", "pot_id": pot,
+            "sample_index": sample_index, "timestamp": timestamp, "flag": "stable"}
+
+
+def test_push_evidence_after_reboot_reused_sample_index_is_still_sent(tmp_path, monkeypatch):
+    # Board reboot restarts the firmware counter: same sample_index, new timestamp.
+    # Keyed on sample_index this second record was silently dropped (2026-10-06 bug).
+    import push_to_karbon_assure as pc
+    sent = []
+    monkeypatch.setattr(pc, "_try_send", lambda path, payload, config: (sent.append(payload) or (True, "")))
+    db = str(tmp_path / "q.db")
+    pc.push_evidence(_evidence(9, "2026-09-23T14:27:19+00:00"), {}, db_path=db)
+    pc.push_evidence(_evidence(9, "2026-10-06T12:16:17+00:00"), {}, db_path=db)
+    assert [p["timestamp"] for p in sent] == ["2026-09-23T14:27:19+00:00", "2026-10-06T12:16:17+00:00"]
+
+
+def test_push_evidence_same_reading_is_deduplicated(tmp_path, monkeypatch):
+    import push_to_karbon_assure as pc
+    sent = []
+    monkeypatch.setattr(pc, "_try_send", lambda path, payload, config: (sent.append(payload) or (True, "")))
+    db = str(tmp_path / "q.db")
+    pc.push_evidence(_evidence(9, "2026-10-06T12:16:17+00:00"), {}, db_path=db)
+    pc.push_evidence(_evidence(9, "2026-10-06T12:16:17+00:00"), {}, db_path=db)
+    assert len(sent) == 1

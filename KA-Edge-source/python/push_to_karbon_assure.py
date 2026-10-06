@@ -35,6 +35,17 @@ Which destination names to look for is DEFAULT_DESTINATIONS ("local",
 A destination with none of its four vars set is simply not configured yet
 and is skipped -- push still works for whichever destinations are.
 
+Optional, per destination -- which pots' data it receives (allowed_pots()):
+
+  KARBON_ASSURE_<NAME>_POTS           comma-separated pot ids, e.g. "B" or
+                                       "A,B". Unset falls back to
+                                       DEFAULT_POTS: "cloud" gets Pot B
+                                       only (the demo project represents
+                                       the degrading pot -- 2026-10-06, see
+                                       docs/plan/cloud-push-pot-b-only-
+                                       2026-10-06.md), any other
+                                       destination gets every pot.
+
 Auth: X-Webhook-Signature: sha256=<hex> HMAC-SHA256 over the raw request
 body, keyed by KARBON_ASSURE_DEVICE_SECRET -- mirrors
 src/modules/ingestion/satellite/webhook.py's verification shape on the
@@ -111,6 +122,33 @@ def load_configs(names: tuple[str, ...] = DEFAULT_DESTINATIONS) -> dict[str, dic
     return configs
 
 
+# Fallback pot scope per destination when KARBON_ASSURE_<NAME>_POTS is unset.
+# "cloud" is pinned to Pot B in code (not only via .env) for the same reason
+# main.py pins its destination list: a stale .env or a stray process with old
+# env must not silently start sending Pot A to the demo project again.
+# Destinations not listed here receive every pot.
+DEFAULT_POTS: dict[str, frozenset[str]] = {"cloud": frozenset({"B"})}
+
+
+def allowed_pots(name: str) -> frozenset[str] | None:
+    """Pots whose data destination `name` should receive, or None for all.
+
+    Reads KARBON_ASSURE_<NAME>_POTS (comma-separated, e.g. "B" or "A,B");
+    unset or blank falls back to DEFAULT_POTS. Each id must be a single
+    uppercase letter -- the same pot_id shape the backend's schema accepts
+    (^[A-Z]$) -- otherwise ConfigError, so a typo can't widen the scope.
+    """
+    env_var = f"KARBON_ASSURE_{name.upper()}_POTS"
+    raw = os.environ.get(env_var, "").strip()
+    if not raw:
+        return DEFAULT_POTS.get(name)
+    pots = [p.strip() for p in raw.split(",") if p.strip()]
+    invalid = [p for p in pots if not (len(p) == 1 and "A" <= p <= "Z")]
+    if not pots or invalid:
+        raise ConfigError(f"{env_var}={raw!r}: expected comma-separated pot ids like 'B' or 'A,B'")
+    return frozenset(pots)
+
+
 def db_path_for(name: str, db_path: str = sync_queue.DEFAULT_DB_PATH) -> str:
     """Per-destination sync-queue DB path, so 'local' and 'cloud' sync
     state (queued/synced/backoff) are tracked independently -- an outage
@@ -179,8 +217,15 @@ def push_evidence(record: dict, config: dict, db_path: str = sync_queue.DEFAULT_
     confidence, contributing_trend, model_version, schema_version,
     time_uncertain, raw={rsmi, gas_index, temp_c, light_lux}).
     Never raises -- push failures are queued for retry, not propagated.
+
+    Queue key is the reading's timestamp, not sample_index (2026-10-06):
+    sample_index is the firmware's in-memory counter and restarts near zero
+    on every board reboot, so a sample_index key collided with rows already
+    in the (never-purged) queue from earlier sessions and enqueue() silently
+    dropped every new record -- nothing sent, nothing logged. Mirrors the
+    backend's own 2026-10-03 re-key of soil_health_evidence onto measured_at.
     """
-    key = f"{record['node_id']}|{record['pot_id']}|{record['sample_index']}"
+    key = f"{record['node_id']}|{record['pot_id']}|{record['timestamp']}"
     queue_id = sync_queue.enqueue("evidence", key, record, db_path=db_path)
     if queue_id is None:
         return  # already queued (or already synced and purged) -- no-op
@@ -199,7 +244,8 @@ def push_raw_batch(node_id: str, project_id: str, pot_id: str, readings: list[di
     attempt to send each chunk immediately. Never raises."""
     for start in range(0, len(readings), MAX_RAW_BATCH_SIZE):
         chunk = readings[start:start + MAX_RAW_BATCH_SIZE]
-        chunk_key = f"{node_id}|{pot_id}|{chunk[0]['sample_index']}-{chunk[-1]['sample_index']}"
+        # received_at, not sample_index -- same reboot-collision reason as push_evidence's key
+        chunk_key = f"{node_id}|{pot_id}|{chunk[0]['received_at']}-{chunk[-1]['received_at']}"
         payload = {
             "node_id": node_id,
             "project_id": project_id,
